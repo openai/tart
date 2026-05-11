@@ -3,6 +3,7 @@ import Cocoa
 import Darwin
 import Dispatch
 import SwiftUI
+import UniformTypeIdentifiers
 import Virtualization
 import OpenTelemetryApi
 import System
@@ -94,6 +95,11 @@ struct Run: AsyncParsableCommand {
     "Disable clipboard sharing between host and guest.",
     discussion: "Clipboard sharing requires spice-vdagent package on Linux and https://github.com/cirruslabs/tart-guest-agent on macOS."))
   var noClipboard: Bool = false
+
+  @Flag(help: ArgumentHelp(
+    "Disable drag and drop support in the built-in UI.",
+    discussion: "When drag and drop is enabled (the default), files dragged onto the VM window are copied to a shared directory. macOS guests can access the dropped files at /Volumes/My Shared Files/Dropped Files/."))
+  var noDragAndDrop: Bool = false
 
   #if arch(arm64)
     @Flag(help: "Boot into recovery mode")
@@ -408,11 +414,27 @@ struct Run: AsyncParsableCommand {
     // Parse root disk options
     let diskOptions = DiskOptions(rootDiskOpts)
 
+    // Determine whether the built-in GUI window will be shown
+    let useVNCWithoutGraphics = (vnc || vncExperimental) && !graphics
+    let willShowBuiltInUI = !noGraphics && !useVNCWithoutGraphics
+
+    // Create a temporary drop zone directory that is shared with the VM and used
+    // as the destination for files dragged onto the built-in UI window.
+    // The directory lives in ~/.tart/tmp/ and will be cleaned up by tart's GC.
+    var dropZoneURL: URL? = nil
+    if willShowBuiltInUI && !noDragAndDrop {
+      if #available(macOS 13, *) {
+        let dropDir = try Config().tartTmpDir.appendingPathComponent("dropzone-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dropDir, withIntermediateDirectories: true)
+        dropZoneURL = dropDir
+      }
+    }
+
     vm = try VM(
       vmDir: vmDir,
       network: userSpecifiedNetwork(vmDir: vmDir) ?? NetworkShared(),
       additionalStorageDevices: try additionalDiskAttachments(),
-      directorySharingDevices: directoryShares() + rosettaDirectoryShare(),
+      directorySharingDevices: directoryShares(dropZoneURL: dropZoneURL) + rosettaDirectoryShare(),
       serialPorts: serialPorts,
       suspendable: suspendable,
       nested: nested,
@@ -593,7 +615,6 @@ struct Run: AsyncParsableCommand {
     }
     sigusr2Src.activate()
 
-    let useVNCWithoutGraphics = (vnc || vncExperimental) && !graphics
     if noGraphics || useVNCWithoutGraphics {
       // Enter the main event loop without bringing up any UI,
       // waiting for the VM to exit.
@@ -601,7 +622,7 @@ struct Run: AsyncParsableCommand {
 
       NSApplication.shared.run()
     } else {
-      runUI(suspendable, captureSystemKeys)
+      runUI(suspendable, captureSystemKeys, dropZoneURL: dropZoneURL)
     }
   }
 
@@ -682,8 +703,30 @@ struct Run: AsyncParsableCommand {
     }
   }
 
-  func directoryShares() throws -> [VZDirectorySharingDeviceConfiguration] {
-    if dir.isEmpty {
+  func directoryShares(dropZoneURL: URL? = nil) throws -> [VZDirectorySharingDeviceConfiguration] {
+    var allDirectoryShares: [DirectoryShare] = []
+
+    for rawDir in dir {
+      allDirectoryShares.append(try DirectoryShare(parseFrom: rawDir))
+    }
+
+    // Append the drag-and-drop drop zone as an unnamed share so that when it is
+    // the only share on the automount tag it becomes a VZSingleDirectoryShare and
+    // its contents appear directly at /Volumes/My Shared Files/ in the guest.
+    // When merged with other --dir shares the auto-naming logic below gives it
+    // the friendly name "Dropped Files".
+    if let dropZoneURL = dropZoneURL {
+      if #available(macOS 13, *) {
+        allDirectoryShares.append(DirectoryShare(
+          name: nil,
+          path: dropZoneURL,
+          readOnly: false,
+          mountTag: VZVirtioFileSystemDeviceConfiguration.macOSGuestAutomountTag
+        ))
+      }
+    }
+
+    if allDirectoryShares.isEmpty {
       return []
     }
 
@@ -691,30 +734,38 @@ struct Run: AsyncParsableCommand {
       throw UnsupportedOSError("directory sharing", "is")
     }
 
-    var allDirectoryShares: [DirectoryShare] = []
-
-    for rawDir in dir {
-      allDirectoryShares.append(try DirectoryShare(parseFrom: rawDir))
-    }
-
-    return try Dictionary(grouping: allDirectoryShares, by: {$0.mountTag}).map { mountTag, directoryShares in
+    return try Dictionary(grouping: allDirectoryShares, by: { $0.mountTag }).map { mountTag, shares in
       let sharingDevice = VZVirtioFileSystemDeviceConfiguration(tag: mountTag)
 
-      var allNamedShares = true
-      for directoryShare in directoryShares {
-        if directoryShare.name == nil {
-          allNamedShares = false
+      let allNamed = shares.allSatisfy { $0.name != nil }
+
+      if shares.count == 1 && !allNamed {
+        // Single unnamed share: expose its contents directly at the mount root
+        sharingDevice.share = VZSingleDirectoryShare(directory: try shares[0].createConfiguration())
+      } else if !allNamed {
+        // Multiple shares with some unnamed: only allow if exactly one is unnamed
+        // (happens when an unnamed --dir share is combined with the named drop zone)
+        let unnamedCount = shares.filter { $0.name == nil }.count
+        if unnamedCount > 1 {
+          throw ValidationError("invalid --dir syntax: for multiple directory shares each one of them should be named")
         }
-      }
-      if directoryShares.count == 1 && directoryShares.first!.name == nil {
-        let directoryShare = directoryShares.first!
-        let singleDirectoryShare = VZSingleDirectoryShare(directory: try directoryShare.createConfiguration())
-        sharingDevice.share = singleDirectoryShare
-      } else if !allNamedShares {
-        throw ValidationError("invalid --dir syntax: for multiple directory shares each one of them should be named")
+        // Auto-name the single unnamed share. The drop zone path ends with
+        // "dropzone-<UUID>" so give it the user-friendly name "Dropped Files";
+        // all other unnamed shares get their directory's last path component.
+        var directories: [String: VZSharedDirectory] = [:]
+        for share in shares {
+          let autoName = share.path.lastPathComponent.hasPrefix("dropzone-")
+            ? "Dropped Files"
+            : share.path.lastPathComponent
+          directories[share.name ?? autoName] = try share.createConfiguration()
+        }
+        sharingDevice.share = VZMultipleDirectoryShare(directories: directories)
       } else {
-        var directories: [String : VZSharedDirectory] = Dictionary()
-        try directoryShares.forEach { directories[$0.name!] = try $0.createConfiguration() }
+        // All named: create a multi-directory share
+        var directories: [String: VZSharedDirectory] = [:]
+        for share in shares {
+          directories[share.name!] = try share.createConfiguration()
+        }
         sharingDevice.share = VZMultipleDirectoryShare(directories: directories)
       }
 
@@ -751,41 +802,52 @@ struct Run: AsyncParsableCommand {
     #endif
   }
 
-  private func runUI(_ suspendable: Bool, _ captureSystemKeys: Bool) {
+  private func runUI(_ suspendable: Bool, _ captureSystemKeys: Bool, dropZoneURL: URL?) {
     MainApp.suspendable = suspendable
     MainApp.capturesSystemKeys = captureSystemKeys
+    MainApp.dropZoneURL = dropZoneURL
     MainApp.main()
+  }
+}
+
+// MARK: - VM window content with drag-and-drop handled at the SwiftUI layer
+
+/// Top-level SwiftUI view for the VM window. Drag-and-drop is handled here
+/// using SwiftUI's .onDrop so it fires on NSHostingView before any AppKit
+/// subview (including VZVirtualMachineView) can intercept the drag session.
+struct VMWindowView: View {
+  var body: some View {
+    VMView(vm: vm!, capturesSystemKeys: MainApp.capturesSystemKeys, dropZoneURL: MainApp.dropZoneURL)
+      .onAppear {
+        NSWindow.allowsAutomaticWindowTabbing = false
+      }
+      .onDisappear {
+        let ret = kill(getpid(), MainApp.suspendable ? SIGUSR1 : SIGINT)
+        if ret != 0 {
+          NSApplication.shared.terminate(nil)
+        }
+      }
   }
 }
 
 struct MainApp: App {
   static var suspendable: Bool = false
   static var capturesSystemKeys: Bool = false
+  static var dropZoneURL: URL? = nil
 
   @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
 
   var body: some Scene {
     WindowGroup(vm!.name) {
-      Group {
-        VMView(vm: vm!, capturesSystemKeys: MainApp.capturesSystemKeys).onAppear {
-          NSWindow.allowsAutomaticWindowTabbing = false
-        }.onDisappear {
-          let ret = kill(getpid(), MainApp.suspendable ? SIGUSR1 : SIGINT)
-          if ret != 0 {
-            // Fallback to the old termination method that doesn't
-            // propagate the cancellation to Task's in case graceful
-            // termination via kill(2) is not successful
-            NSApplication.shared.terminate(self)
-          }
-        }
-      }.frame(
-        minWidth: CGFloat(vm!.config.display.width),
-        idealWidth: CGFloat(vm!.config.display.width),
-        maxWidth: .infinity,
-        minHeight: CGFloat(vm!.config.display.height),
-        idealHeight: CGFloat(vm!.config.display.height),
-        maxHeight: .infinity
-      )
+      VMWindowView()
+        .frame(
+          minWidth: CGFloat(vm!.config.display.width),
+          idealWidth: CGFloat(vm!.config.display.width),
+          maxWidth: .infinity,
+          minHeight: CGFloat(vm!.config.display.height),
+          idealHeight: CGFloat(vm!.config.display.height),
+          maxHeight: .infinity
+        )
     }.commands {
       // Remove some standard menu options
       CommandGroup(replacing: .help, addition: {})
@@ -867,14 +929,14 @@ struct AboutTart: View {
 }
 
 struct VMView: NSViewRepresentable {
-  typealias NSViewType = VZVirtualMachineView
+  typealias NSViewType = VMContainerView
 
   @ObservedObject var vm: VM
   var capturesSystemKeys: Bool
+  var dropZoneURL: URL?
 
-  func makeNSView(context: Context) -> NSViewType {
-    let machineView = VZVirtualMachineView()
-
+  func makeNSView(context: Context) -> VMContainerView {
+    let machineView = TartVirtualMachineView()
     machineView.capturesSystemKeys = capturesSystemKeys
 
     // If not specified, enable automatic display
@@ -886,11 +948,176 @@ struct VMView: NSViewRepresentable {
       machineView.automaticallyReconfiguresDisplay = true
     }
 
-    return machineView
+    if let dropZoneURL = dropZoneURL {
+      machineView.dropZoneURL = dropZoneURL
+    }
+
+    return VMContainerView(machineView: machineView)
   }
 
-  func updateNSView(_ nsView: NSViewType, context: Context) {
-    nsView.virtualMachine = vm.virtualMachine
+  func updateNSView(_ nsView: VMContainerView, context: Context) {
+    nsView.machineView.virtualMachine = vm.virtualMachine
+  }
+}
+
+// MARK: - Drag and Drop
+
+/// Layer-backed highlight overlay. Added as a subview of TartVirtualMachineView
+/// so its CALayer composites on top of Metal rendering. hitTest returns nil so
+/// it is completely transparent to pointer events.
+class DragHighlightView: NSView {
+  private let fillLayer = CALayer()
+  private let borderLayer = CAShapeLayer()
+
+  override init(frame frameRect: NSRect) {
+    super.init(frame: frameRect)
+    wantsLayer = true
+    layer?.backgroundColor = CGColor.clear
+
+    fillLayer.backgroundColor = CGColor.clear
+    layer?.addSublayer(fillLayer)
+
+    borderLayer.fillColor = CGColor.clear
+    borderLayer.lineWidth = 8
+    borderLayer.strokeColor = NSColor.controlAccentColor.cgColor
+    borderLayer.isHidden = true
+    layer?.addSublayer(borderLayer)
+  }
+
+  required init?(coder: NSCoder) {
+    super.init(coder: coder)
+  }
+
+  var isActive: Bool = false {
+    didSet {
+      let accent = NSColor.controlAccentColor
+      fillLayer.backgroundColor = isActive
+        ? accent.withAlphaComponent(0.15).cgColor
+        : CGColor.clear
+      borderLayer.isHidden = !isActive
+    }
+  }
+
+  override var isOpaque: Bool { false }
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+  override func layout() {
+    super.layout()
+    fillLayer.frame = bounds
+    borderLayer.frame = bounds
+    borderLayer.path = CGPath(rect: bounds.insetBy(dx: 4, dy: 4), transform: nil)
+  }
+}
+
+/// VZVirtualMachineView subclass. Hosts the DragHighlightView as an internal
+/// subview so the highlight renders above the Metal framebuffer.
+class TartVirtualMachineView: VZVirtualMachineView {
+  var dropZoneURL: URL?
+  let highlight = DragHighlightView()
+
+  override init(frame frameRect: NSRect) {
+    super.init(frame: frameRect)
+    highlight.autoresizingMask = [.width, .height]
+    addSubview(highlight)
+  }
+
+  required init?(coder: NSCoder) {
+    super.init(coder: coder)
+  }
+
+  override func layout() {
+    super.layout()
+    highlight.frame = bounds
+  }
+}
+
+/// Wraps TartVirtualMachineView.
+/// Drag-and-drop is registered in viewDidMoveToWindow (not init) so AppKit
+/// records the registration with the window. All NSDraggingDestination methods
+/// live here so we don't depend on VZVirtualMachineView accepting overrides.
+class VMContainerView: NSView {
+  let machineView: TartVirtualMachineView
+
+  init(machineView: TartVirtualMachineView) {
+    self.machineView = machineView
+    super.init(frame: .zero)
+    addSubview(machineView)
+  }
+
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
+
+  override func layout() {
+    super.layout()
+    machineView.frame = bounds
+  }
+
+  // Register AFTER the view is inserted into a window so AppKit records
+  // the registration against the live window drag-destination table.
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    guard window != nil, machineView.dropZoneURL != nil else { return }
+    registerForDraggedTypes([
+      .fileURL,
+      NSPasteboard.PasteboardType("NSFilenamesPboardType"),
+    ])
+    fputs("tart: drag-and-drop registered (drop zone: \(machineView.dropZoneURL!.path))\n", stderr)
+  }
+
+  // MARK: NSDraggingDestination
+
+  override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+    fputs("tart: draggingEntered — types: \(sender.draggingPasteboard.types ?? [])\n", stderr)
+    guard machineView.dropZoneURL != nil, !fileURLs(from: sender).isEmpty else { return [] }
+    machineView.highlight.isActive = true
+    return .copy
+  }
+
+  override func wantsPeriodicDraggingUpdates() -> Bool { false }
+
+  override func draggingExited(_ sender: NSDraggingInfo?) {
+    machineView.highlight.isActive = false
+  }
+
+  override func draggingEnded(_ sender: NSDraggingInfo) {
+    machineView.highlight.isActive = false
+  }
+
+  override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { true }
+
+  override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+    guard let dropZoneURL = machineView.dropZoneURL else { return false }
+    let urls = fileURLs(from: sender)
+    guard !urls.isEmpty else { return false }
+    fputs("tart: dropping \(urls.count) file(s) to \(dropZoneURL.path)\n", stderr)
+    for url in urls {
+      let dest = dropZoneURL.appendingPathComponent(url.lastPathComponent)
+      do {
+        if FileManager.default.fileExists(atPath: dest.path) {
+          try FileManager.default.removeItem(at: dest)
+        }
+        try FileManager.default.copyItem(at: url, to: dest)
+        fputs("tart: copied \(url.lastPathComponent)\n", stderr)
+      } catch {
+        let e = error; let n = url.lastPathComponent
+        DispatchQueue.main.async {
+          let alert = NSAlert()
+          alert.messageText = "Failed to copy \"\(n)\" to the VM"
+          alert.informativeText = e.localizedDescription
+          alert.alertStyle = .warning
+          alert.runModal()
+        }
+      }
+    }
+    return true
+  }
+
+  private func fileURLs(from info: NSDraggingInfo) -> [URL] {
+    info.draggingPasteboard.readObjects(
+      forClasses: [NSURL.self],
+      options: [.urlReadingFileURLsOnly: true]
+    ) as? [URL] ?? []
   }
 }
 
@@ -1031,6 +1258,14 @@ struct DirectoryShare {
   let path: URL
   let readOnly: Bool
   let mountTag: String
+
+  // Programmatic initializer for internal use (e.g. the drag-and-drop drop zone)
+  init(name: String?, path: URL, readOnly: Bool, mountTag: String) {
+    self.name = name
+    self.path = path
+    self.readOnly = readOnly
+    self.mountTag = mountTag
+  }
 
   init(parseFrom: String) throws {
     var parseFrom = parseFrom
