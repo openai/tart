@@ -52,6 +52,79 @@ final class DirectoryShareTests: XCTestCase {
     XCTAssertEqual(inverseRoShare.mountTag, "foo-bar")
   }
 
+  func testProgrammaticInit() throws {
+    let url = URL(filePath: "/tmp/dropzone-test")
+    let share = DirectoryShare(name: "Dropped Files", path: url, readOnly: false, mountTag: "test-tag")
+    XCTAssertEqual(share.name, "Dropped Files")
+    XCTAssertEqual(share.path, url)
+    XCTAssertFalse(share.readOnly)
+    XCTAssertEqual(share.mountTag, "test-tag")
+  }
+
+  func testCollectWithoutDropZone() throws {
+    let shares = try DirectoryShare.collect(dirArgs: ["build:/Users/admin/build"])
+    XCTAssertEqual(shares.count, 1)
+    XCTAssertEqual(shares[0].name, "build")
+  }
+
+  func testCollectEmptyWithoutDropZone() throws {
+    let shares = try DirectoryShare.collect(dirArgs: [])
+    XCTAssertTrue(shares.isEmpty)
+  }
+
+  func testCollectWithDropZoneOnly() throws {
+    let url = URL(filePath: "/tmp/dropzone-test")
+    let shares = try DirectoryShare.collect(dirArgs: [], dropZoneURL: url)
+    XCTAssertEqual(shares.count, 1)
+    XCTAssertEqual(shares[0].name, "Dropped Files")
+    XCTAssertEqual(shares[0].path, url)
+    XCTAssertFalse(shares[0].readOnly)
+    XCTAssertEqual(shares[0].mountTag, VZVirtioFileSystemDeviceConfiguration.macOSGuestAutomountTag)
+  }
+
+  func testCollectWithDropZoneAndNamedDirs() throws {
+    let url = URL(filePath: "/tmp/dropzone-test")
+    let shares = try DirectoryShare.collect(
+      dirArgs: ["src:/Users/admin/src", "build:/Users/admin/build:ro"],
+      dropZoneURL: url
+    )
+    XCTAssertEqual(shares.count, 3)
+    XCTAssertEqual(shares[0].name, "src")
+    XCTAssertEqual(shares[1].name, "build")
+    XCTAssertTrue(shares[1].readOnly)
+    XCTAssertEqual(shares[2].name, "Dropped Files")
+    XCTAssertEqual(shares[2].path, url)
+  }
+
+  // When --dir is unnamed and drag-and-drop is on, both shares end up on the
+  // automount tag — collection succeeds but the downstream sharing-device
+  // builder will reject the combination with a clearer error than before.
+  func testCollectWithDropZoneAndUnnamedDir() throws {
+    let url = URL(filePath: "/tmp/dropzone-test")
+    let shares = try DirectoryShare.collect(
+      dirArgs: ["/Users/admin/build"],
+      dropZoneURL: url
+    )
+    XCTAssertEqual(shares.count, 2)
+    XCTAssertNil(shares[0].name)
+    XCTAssertEqual(shares[1].name, "Dropped Files")
+  }
+
+  // An unnamed --dir with an explicit non-default mount tag is on a different
+  // device from the drop zone, so it doesn't conflict.
+  func testCollectWithDropZoneAndUnnamedDirOnCustomTag() throws {
+    let url = URL(filePath: "/tmp/dropzone-test")
+    let shares = try DirectoryShare.collect(
+      dirArgs: ["/Users/admin/build:tag=custom"],
+      dropZoneURL: url
+    )
+    XCTAssertEqual(shares.count, 2)
+    XCTAssertNil(shares[0].name)
+    XCTAssertEqual(shares[0].mountTag, "custom")
+    XCTAssertEqual(shares[1].name, "Dropped Files")
+    XCTAssertEqual(shares[1].mountTag, VZVirtioFileSystemDeviceConfiguration.macOSGuestAutomountTag)
+  }
+
   func testURL() throws {
     let archiveWithoutNameOrOptions = try DirectoryShare(parseFrom: "https://example.com/archive.tar.gz")
     XCTAssertNil(archiveWithoutNameOrOptions.name)
