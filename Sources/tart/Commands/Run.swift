@@ -1128,13 +1128,22 @@ class VMContainerView: NSView {
     let controlSocketURL = MainApp.controlSocketURL
     let parentWindow = self.window
 
+    // One cancellation token covers the whole drop gesture: clicking ⊗ on
+    // the toast aborts the current file AND skips any remaining files in a
+    // multi-file drop.
+    let cancelToken = DropCancellationToken()
+
     // Copy off the main thread: large files would otherwise freeze the VM
     // window (which is the same view that's rendering the VM's framebuffer).
     // The toast (HUD-style progress panel) anchors to `parentWindow` so the
-    // user sees a per-file progress bar instead of a frozen UI.
+    // user sees a per-file progress bar — and a cancel button — instead of
+    // a frozen UI.
     let totalFiles = urls.count
     copyQueue.async {
       for (idx, url) in urls.enumerated() {
+        // Honor cancellation before starting the next file in a multi-drop.
+        if cancelToken.isCancelled { break }
+
         let dest = dropZoneURL.appendingPathComponent(url.lastPathComponent)
         let totalBytes = ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? Int64) ?? 0
         let fileIndex = idx + 1
@@ -1145,12 +1154,18 @@ class VMContainerView: NSView {
             filename: url.lastPathComponent,
             totalBytes: totalBytes,
             index: fileIndex,
-            count: totalFiles
+            count: totalFiles,
+            cancelToken: cancelToken
           )
         }
 
         do {
-          try DropProgressCopier.copy(from: url, to: dest, totalBytes: totalBytes) { copied in
+          try DropProgressCopier.copy(
+            from: url,
+            to: dest,
+            totalBytes: totalBytes,
+            token: cancelToken
+          ) { copied in
             DispatchQueue.main.async {
               DropProgressToast.shared.update(
                 copied: copied,
@@ -1177,6 +1192,15 @@ class VMContainerView: NSView {
               controlSocketURL: controlSocketURL
             )
           }
+        } catch is DropCopyCancelled {
+          // User clicked ⊗: remove the partial destination so the share
+          // folder doesn't accumulate half-copied junk, surface "Cancelled"
+          // on the toast, and skip the remaining files in this drop.
+          try? FileManager.default.removeItem(at: dest)
+          DispatchQueue.main.async {
+            DropProgressToast.shared.finish(success: false, cancelled: true)
+          }
+          break
         } catch {
           DispatchQueue.main.async {
             DropProgressToast.shared.finish(success: false)

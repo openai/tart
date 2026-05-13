@@ -1,21 +1,49 @@
 import AppKit
 import Foundation
 
+/// Thread-safe cancellation flag for an in-flight host→guest copy. The toast
+/// holds one of these and flips it when the user clicks the close button;
+/// `DropProgressCopier` polls it between chunks and throws `DropCopyCancelled`.
+final class DropCancellationToken {
+  private let lock = NSLock()
+  private var _cancelled = false
+
+  var isCancelled: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return _cancelled
+  }
+
+  func cancel() {
+    lock.lock()
+    defer { lock.unlock() }
+    _cancelled = true
+  }
+}
+
+/// Sentinel thrown by `DropProgressCopier.copy` when the caller's token is
+/// flipped mid-copy. Distinct from a real I/O failure so the drop handler can
+/// suppress the "Failed to copy" alert in this case.
+struct DropCopyCancelled: Error {}
+
 /// Borderless HUD-style panel shown over the VM window during a host→guest
-/// drag-and-drop copy. Displays the filename, a determinate progress bar, and
-/// a "[i/N] copied / total" detail line; auto-hides shortly after `finish`.
+/// drag-and-drop copy. Renders like a macOS notification banner: anchored to
+/// the top-right of the VM window, slides in from the right edge, shows the
+/// filename / determinate bar / "[i/N] copied / total" detail line, and has
+/// a close (⊗) button that cancels the in-flight copy.
 ///
-/// All methods MUST be called on the main thread. Callers driving copies from
-/// a background queue should hop via `DispatchQueue.main.async` first.
+/// All methods MUST be called on the main thread. Callers driving copies
+/// from a background queue should hop via `DispatchQueue.main.async` first.
 ///
-/// Lifecycle:
-///   begin(...)           -> panel appears as a child of the VM window
-///   update(...)          -> progress bar advances (no-op if not visible)
-///   finish(success:)     -> brief "Done" / "Failed" message, then auto-hide
+/// Lifecycle per file:
+///   begin(...)                  -> panel appears (or retargets) and slides
+///                                  in if it wasn't already visible
+///   update(...)                 -> bar advances; no-op if not visible
+///   finish(success:cancelled:)  -> brief "Done"/"Cancelled"/"Copy failed"
+///                                  state, then auto-hide after ~0.8 s
 ///
-/// Multiple files dropped in one gesture are copied serially by the caller;
-/// `begin` may be invoked again before the previous `finish` has hidden the
-/// panel — that just retargets the existing panel to the new file.
+/// Multiple files dropped in one gesture serially reuse the same panel and
+/// increment the [i/N] counter without re-animating.
 final class DropProgressToast {
   static let shared = DropProgressToast()
 
@@ -23,22 +51,42 @@ final class DropProgressToast {
   private var progressBar: NSProgressIndicator!
   private var titleLabel: NSTextField!
   private var detailLabel: NSTextField!
+  private var cancelButton: NSButton!
   private var hideWorkItem: DispatchWorkItem?
   private weak var anchorWindow: NSWindow?
 
+  /// Cancellation token for the copy currently driving the toast. Cleared
+  /// once the user clicks ⊗ or `finish` is called, so a late click after the
+  /// copy already completed does nothing.
+  private var currentToken: DropCancellationToken?
+
   private init() {}
 
-  /// Show the toast (or retarget it to a new file) and reset the progress bar.
-  /// `parent` is the VM window; the panel becomes a child of it so it tracks
-  /// movement and z-order. `totalBytes <= 0` flips the bar to indeterminate.
-  func begin(parent: NSWindow?, filename: String, totalBytes: Int64, index: Int, count: Int) {
+  /// Show the toast (or retarget it to a new file) and reset the progress
+  /// bar. `parent` is the VM window; the panel becomes a child of it so it
+  /// tracks movement and z-order. `cancelToken` is what the close button
+  /// flips on click. `totalBytes <= 0` switches the bar to indeterminate.
+  func begin(
+    parent: NSWindow?,
+    filename: String,
+    totalBytes: Int64,
+    index: Int,
+    count: Int,
+    cancelToken: DropCancellationToken
+  ) {
     ensurePanel()
     hideWorkItem?.cancel()
     hideWorkItem = nil
 
+    let wasAlreadyVisible = (panel?.isVisible == true)
+
     anchorWindow = parent
+    currentToken = cancelToken
+
     titleLabel.stringValue = filename
     detailLabel.stringValue = formatDetail(copied: 0, total: totalBytes, index: index, count: count)
+    cancelButton.isHidden = false
+    cancelButton.isEnabled = true
 
     if totalBytes > 0 {
       progressBar.isIndeterminate = false
@@ -50,18 +98,23 @@ final class DropProgressToast {
     }
     progressBar.startAnimation(nil)
 
-    positionPanel()
     guard let panel = panel else { return }
     if let parent = parent {
-      // addChildWindow re-parents harmlessly even if already attached.
+      // Re-parenting is harmless if we're already a child of `parent`.
       parent.addChildWindow(panel, ordered: .above)
+    }
+    if wasAlreadyVisible {
+      // Subsequent files in a multi-file drop: just retarget the existing
+      // panel in place, don't replay the slide-in.
+      positionPanel(animated: false)
     } else {
+      positionPanel(animated: true)
       panel.orderFront(nil)
     }
   }
 
-  /// Update the progress bar and detail line. No-op if the panel isn't visible
-  /// (i.e. `begin` was never called or `finish` already hid it).
+  /// Update the progress bar and detail line. No-op if the panel isn't
+  /// visible (i.e. `begin` was never called or `finish` already hid it).
   func update(copied: Int64, total: Int64, index: Int, count: Int) {
     guard let panel = panel, panel.isVisible else { return }
     if total > 0 {
@@ -71,26 +124,39 @@ final class DropProgressToast {
     detailLabel.stringValue = formatDetail(copied: copied, total: total, index: index, count: count)
   }
 
-  /// Flash a "Done" or "Copy failed" state and schedule the panel to hide
-  /// after a short delay so the user sees the final state.
-  func finish(success: Bool) {
+  /// Flash a final state and schedule the panel to hide. Pass `cancelled:
+  /// true` when the copy ended because the user clicked ⊗; that surfaces
+  /// "Cancelled" instead of "Copy failed".
+  func finish(success: Bool, cancelled: Bool = false) {
     guard let panel = panel else { return }
     if success {
       progressBar.isIndeterminate = false
       progressBar.doubleValue = progressBar.maxValue
       detailLabel.stringValue = "Done"
+    } else if cancelled {
+      detailLabel.stringValue = "Cancelled"
     } else {
       detailLabel.stringValue = "Copy failed"
     }
     progressBar.stopAnimation(nil)
+    cancelButton.isEnabled = false
+    currentToken = nil
 
     let work = DispatchWorkItem { [weak self] in
       self?.hide()
     }
     hideWorkItem = work
-    // 0.8s lets the user register the final state without lingering forever.
+    // 0.8 s lets the user register the final state without lingering.
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
-    _ = panel  // silence warning about unused panel
+    _ = panel
+  }
+
+  @objc private func cancelClicked() {
+    // Flip the token; the copy loop notices on its next chunk boundary and
+    // throws DropCopyCancelled, which the caller turns into finish(cancelled:).
+    currentToken?.cancel()
+    cancelButton.isEnabled = false
+    detailLabel.stringValue = "Cancelling…"
   }
 
   private func hide() {
@@ -104,7 +170,7 @@ final class DropProgressToast {
   private func ensurePanel() {
     if panel != nil { return }
 
-    let contentRect = NSRect(x: 0, y: 0, width: 360, height: 78)
+    let contentRect = NSRect(x: 0, y: 0, width: 320, height: 78)
     let p = NSPanel(
       contentRect: contentRect,
       styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
@@ -120,7 +186,7 @@ final class DropProgressToast {
     p.hasShadow = true
     p.level = .floating
 
-    // Vibrant rounded background — HUD-style.
+    // Vibrant rounded background — HUD-style, matches notification banners.
     let effect = NSVisualEffectView(frame: contentRect)
     effect.material = .hudWindow
     effect.blendingMode = .behindWindow
@@ -139,6 +205,25 @@ final class DropProgressToast {
     title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     effect.addSubview(title)
 
+    // Top-right close button. SF Symbol `xmark.circle.fill` in secondary
+    // label color so it reads as "dismiss" rather than competing with the
+    // filename for attention.
+    let btn = NSButton()
+    btn.isBordered = false
+    btn.bezelStyle = .regularSquare
+    btn.imagePosition = .imageOnly
+    btn.imageScaling = .scaleProportionallyDown
+    btn.image = NSImage(
+      systemSymbolName: "xmark.circle.fill",
+      accessibilityDescription: "Cancel copy"
+    )
+    btn.contentTintColor = .secondaryLabelColor
+    btn.target = self
+    btn.action = #selector(cancelClicked)
+    btn.translatesAutoresizingMaskIntoConstraints = false
+    btn.toolTip = "Cancel copy"
+    effect.addSubview(btn)
+
     let bar = NSProgressIndicator()
     bar.style = .bar
     bar.isIndeterminate = false
@@ -155,16 +240,25 @@ final class DropProgressToast {
     effect.addSubview(detail)
 
     NSLayoutConstraint.activate([
+      // Title spans from the left padding to just before the close button.
       title.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 14),
-      title.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -14),
+      title.trailingAnchor.constraint(equalTo: btn.leadingAnchor, constant: -6),
       title.topAnchor.constraint(equalTo: effect.topAnchor, constant: 10),
 
+      // Close button: 18x18, hugging the top-right corner.
+      btn.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -10),
+      btn.centerYAnchor.constraint(equalTo: title.centerYAnchor),
+      btn.widthAnchor.constraint(equalToConstant: 18),
+      btn.heightAnchor.constraint(equalToConstant: 18),
+
+      // Progress bar spans the full width below the title row.
       bar.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-      bar.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+      bar.trailingAnchor.constraint(equalTo: btn.trailingAnchor),
       bar.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 8),
 
-      detail.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-      detail.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+      // Detail line under the bar.
+      detail.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+      detail.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
       detail.topAnchor.constraint(equalTo: bar.bottomAnchor, constant: 6),
       detail.bottomAnchor.constraint(equalTo: effect.bottomAnchor, constant: -10),
     ])
@@ -173,20 +267,38 @@ final class DropProgressToast {
     self.titleLabel = title
     self.detailLabel = detail
     self.progressBar = bar
+    self.cancelButton = btn
   }
 
-  /// Center the panel along the VM window's bottom edge with a small inset.
-  /// Falls back to no-op if we don't have an anchor window.
-  private func positionPanel() {
+  /// Position the panel in the VM window's top-right corner with a small
+  /// inset. When `animated` is true (first appearance of a drop session),
+  /// the panel starts off-screen-right and slides into place over ~0.18 s,
+  /// mimicking macOS notification banners.
+  private func positionPanel(animated: Bool) {
     guard let panel = panel, let parent = anchorWindow else { return }
     let parentFrame = parent.frame
     let size = panel.frame.size
-    let inset: CGFloat = 16
-    let origin = NSPoint(
-      x: parentFrame.midX - size.width / 2,
-      y: parentFrame.minY + inset
+    let rightInset: CGFloat = 16
+    // Clear the titlebar plus a bit of breathing room.
+    let topInset: CGFloat = 50
+
+    let target = NSPoint(
+      x: parentFrame.maxX - size.width - rightInset,
+      y: parentFrame.maxY - size.height - topInset
     )
-    panel.setFrameOrigin(origin)
+
+    if animated {
+      // Start off-screen to the right, then slide in.
+      let start = NSPoint(x: parentFrame.maxX + 8, y: target.y)
+      panel.setFrameOrigin(start)
+      NSAnimationContext.runAnimationGroup { ctx in
+        ctx.duration = 0.18
+        ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        panel.animator().setFrameOrigin(target)
+      }
+    } else {
+      panel.setFrameOrigin(target)
+    }
   }
 
   private func formatDetail(copied: Int64, total: Int64, index: Int, count: Int) -> String {
@@ -199,21 +311,24 @@ final class DropProgressToast {
   }
 }
 
-/// Chunked file copy with throttled progress callbacks. Used by the drag-and-
-/// drop handler to feed `DropProgressToast` without freezing the VM render
-/// view (the previous synchronous `FileManager.copyItem` blocked the same
-/// queue/view).
+/// Chunked file copy with throttled progress callbacks and cancellation.
+/// Used by the drag-and-drop handler to feed `DropProgressToast` without
+/// freezing the VM render view.
 ///
 /// - Removes any existing file at `dst` first (drops semantically replace).
+/// - Polls `token.isCancelled` between chunks; throws `DropCopyCancelled`
+///   immediately on cancel so the caller can clean up the partial file.
 /// - Reports `progress(copied)` at most once every ~50 ms during the copy,
 ///   plus a final call at completion so the bar always reaches 100%.
-/// - Throws if either side fails; partial output at `dst` is left in place
-///   so the caller can decide how to surface the error.
+/// - Throws on either side's I/O error; partial output at `dst` is left in
+///   place so the caller can decide how to surface the error (delete +
+///   alert, or leave it for the user).
 enum DropProgressCopier {
   static func copy(
     from src: URL,
     to dst: URL,
     totalBytes: Int64,
+    token: DropCancellationToken,
     progress: (Int64) -> Void
   ) throws {
     _ = totalBytes  // accepted for future use (ETA, average rate, etc.)
@@ -236,13 +351,15 @@ enum DropProgressCopier {
       try? output.close()
     }
 
-    let chunkSize = 1 * 1024 * 1024  // 1 MiB — large enough to amortize syscalls,
-    // small enough to stream progress on fast disks.
+    let chunkSize = 1 * 1024 * 1024  // 1 MiB — amortizes syscalls, still
+    // streams progress and bounds cancellation latency on fast disks.
     let reportInterval: TimeInterval = 0.05
     var lastReport = Date(timeIntervalSince1970: 0)
     var copied: Int64 = 0
 
     while true {
+      if token.isCancelled { throw DropCopyCancelled() }
+
       let chunk = input.readData(ofLength: chunkSize)
       if chunk.isEmpty { break }
       try output.write(contentsOf: chunk)
@@ -254,8 +371,8 @@ enum DropProgressCopier {
         lastReport = now
       }
     }
-    // Always fire a final callback so the UI reaches 100% even when the file
-    // finished inside the throttle window.
+    // Always fire a final callback so the UI reaches 100% even when the
+    // file finished inside the throttle window.
     progress(copied)
   }
 }
