@@ -647,7 +647,12 @@ struct Run: AsyncParsableCommand {
 
       NSApplication.shared.run()
     } else {
-      runUI(suspendable, captureSystemKeys, dropZoneURL: dropZoneURL)
+      runUI(
+        suspendable,
+        captureSystemKeys,
+        dropZoneURL: dropZoneURL,
+        controlSocketURL: dropZoneURL != nil ? vmDir.controlSocketURL : nil
+      )
     }
   }
 
@@ -799,10 +804,11 @@ struct Run: AsyncParsableCommand {
     #endif
   }
 
-  private func runUI(_ suspendable: Bool, _ captureSystemKeys: Bool, dropZoneURL: URL?) {
+  private func runUI(_ suspendable: Bool, _ captureSystemKeys: Bool, dropZoneURL: URL?, controlSocketURL: URL?) {
     MainApp.suspendable = suspendable
     MainApp.capturesSystemKeys = captureSystemKeys
     MainApp.dropZoneURL = dropZoneURL
+    MainApp.controlSocketURL = controlSocketURL
     MainApp.main()
   }
 }
@@ -832,6 +838,7 @@ struct MainApp: App {
   static var suspendable: Bool = false
   static var capturesSystemKeys: Bool = false
   static var dropZoneURL: URL? = nil
+  static var controlSocketURL: URL? = nil
 
   @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
 
@@ -1115,6 +1122,10 @@ class VMContainerView: NSView {
       isViewFlipped: self.isFlipped
     )
 
+    // Snapshot the control socket URL on the main actor so the background
+    // Task can use it without crossing actor boundaries.
+    let controlSocketURL = MainApp.controlSocketURL
+
     // Copy off the main thread: large files would otherwise freeze the VM
     // window (which is the same view that's rendering the VM's framebuffer).
     copyQueue.async {
@@ -1127,12 +1138,16 @@ class VMContainerView: NSView {
           try FileManager.default.copyItem(at: url, to: dest)
 
           // After the file lands in the shared drop zone, ask the guest agent
-          // to perform a real drop at the cursor's normalized position. Today
-          // this is a no-op (returns false) so the user-visible result remains
-          // "file appears in /Volumes/My Shared Files/Dropped Files/".
+          // to make the drop visible — Finder-window duplicate when possible,
+          // reveal-in-Finder otherwise. If the agent isn't reachable, the
+          // file in the share folder is still the fallback.
           let destPath = dest.path
           Task {
-            _ = await synthesizeGuestDrop(path: destPath, atNormalized: normalizedPoint)
+            _ = await synthesizeGuestDrop(
+              hostFilePath: destPath,
+              atNormalized: normalizedPoint,
+              controlSocketURL: controlSocketURL
+            )
           }
         } catch {
           let name = url.lastPathComponent
@@ -1158,28 +1173,41 @@ class VMContainerView: NSView {
   }
 }
 
-/// Asks the in-guest tart-guest-agent to perform a drag-and-drop of `path` at
-/// the given normalized coordinates (origin top-left, (1, 1) bottom-right) so
-/// that whatever window the cursor is over receives the file as a real drop.
+/// Asks the in-guest tart-guest-agent to place `hostFilePath` somewhere visible
+/// — into the frontmost Finder window if there is one, otherwise revealed in
+/// Finder. The host path is rewritten to the guest's mount of the drop share
+/// (`/Volumes/My Shared Files/Dropped Files/<filename>`) before being passed
+/// across the wire.
 ///
-/// Returns true if the guest agent reports a successful drop; in that case the
-/// caller treats the share-folder copy as a side effect rather than the
-/// user-visible result. Returns false when the agent is unreachable, returns
-/// an error, or the corresponding RPC isn't available — the caller's existing
-/// fallback (file accessible at /Volumes/My Shared Files/Dropped Files/) then
-/// remains the user-visible outcome.
+/// `normalizedPoint` is captured for a future RPC that actually targets the
+/// cursor's position; for now the AppleScript path uses frontmost-app
+/// heuristics and the coordinate is unused.
 ///
-/// Today this is a no-op stub. Wiring it up requires:
-///   1. A new `DragAndDrop` RPC in tart-guest-agent-proto.
-///   2. A handler in tart-guest-agent (likely NSView.beginDraggingSession from
-///      a hidden 1x1 NSWindow at the cursor's screen position, with an
-///      AppleScript-into-Finder fallback).
-///   3. Pulling the running VM's controlSocketURL into the call site (cf.
-///      Exec.swift) and reusing the existing AgentAsyncClient pattern.
-private func synthesizeGuestDrop(path: String, atNormalized normalized: CGPoint) async -> Bool {
-  _ = path
+/// Returns true when the agent reports a visible outcome (file landed in
+/// Finder or got revealed). On any failure — agent unreachable, no guest
+/// agent installed, AppleScript erroring — returns false so the caller's
+/// existing share-folder behavior remains the user-visible result.
+private func synthesizeGuestDrop(
+  hostFilePath: String,
+  atNormalized normalized: CGPoint,
+  controlSocketURL: URL?
+) async -> Bool {
   _ = normalized
-  return false
+  guard let controlSocketURL = controlSocketURL else { return false }
+
+  let filename = (hostFilePath as NSString).lastPathComponent
+  let guestPath = "/Volumes/My Shared Files/Dropped Files/" + filename
+
+  do {
+    let outcome = try await GuestDropSynthesis.perform(
+      controlSocketURL: controlSocketURL,
+      guestFilePath: guestPath
+    )
+    _ = outcome
+    return true
+  } catch {
+    return false
+  }
 }
 
 struct AdditionalDisk {
