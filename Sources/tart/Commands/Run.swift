@@ -1122,20 +1122,48 @@ class VMContainerView: NSView {
       isViewFlipped: self.isFlipped
     )
 
-    // Snapshot the control socket URL on the main actor so the background
-    // Task can use it without crossing actor boundaries.
+    // Snapshot the control socket URL and parent window on the main actor so
+    // the background Task / dispatch block can use them without crossing
+    // actor boundaries.
     let controlSocketURL = MainApp.controlSocketURL
+    let parentWindow = self.window
 
     // Copy off the main thread: large files would otherwise freeze the VM
     // window (which is the same view that's rendering the VM's framebuffer).
+    // The toast (HUD-style progress panel) anchors to `parentWindow` so the
+    // user sees a per-file progress bar instead of a frozen UI.
+    let totalFiles = urls.count
     copyQueue.async {
-      for url in urls {
+      for (idx, url) in urls.enumerated() {
         let dest = dropZoneURL.appendingPathComponent(url.lastPathComponent)
+        let totalBytes = ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? Int64) ?? 0
+        let fileIndex = idx + 1
+
+        DispatchQueue.main.async {
+          DropProgressToast.shared.begin(
+            parent: parentWindow,
+            filename: url.lastPathComponent,
+            totalBytes: totalBytes,
+            index: fileIndex,
+            count: totalFiles
+          )
+        }
+
         do {
-          if FileManager.default.fileExists(atPath: dest.path) {
-            try FileManager.default.removeItem(at: dest)
+          try DropProgressCopier.copy(from: url, to: dest, totalBytes: totalBytes) { copied in
+            DispatchQueue.main.async {
+              DropProgressToast.shared.update(
+                copied: copied,
+                total: totalBytes,
+                index: fileIndex,
+                count: totalFiles
+              )
+            }
           }
-          try FileManager.default.copyItem(at: url, to: dest)
+
+          DispatchQueue.main.async {
+            DropProgressToast.shared.finish(success: true)
+          }
 
           // After the file lands in the shared drop zone, ask the guest agent
           // to make the drop visible — Finder-window duplicate when possible,
@@ -1150,6 +1178,9 @@ class VMContainerView: NSView {
             )
           }
         } catch {
+          DispatchQueue.main.async {
+            DropProgressToast.shared.finish(success: false)
+          }
           let name = url.lastPathComponent
           let message = error.localizedDescription
           DispatchQueue.main.async {
