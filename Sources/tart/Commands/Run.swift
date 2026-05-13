@@ -960,6 +960,27 @@ struct VMView: NSViewRepresentable {
 
 // MARK: - Drag and Drop
 
+/// Pure coordinate-conversion helpers. Kept as a stand-alone enum so it can be
+/// unit-tested without dragging in AppKit/SwiftUI types.
+enum DropGeometry {
+  /// Normalizes a drop point given in a view's coordinate space to (0..1, 0..1)
+  /// with (0, 0) at top-left and (1, 1) at bottom-right. AppKit views default
+  /// to a bottom-left origin; we flip Y so the guest agent receives a top-down
+  /// coordinate that matches CGEvent's global screen space without needing to
+  /// know the host view's orientation.
+  static func normalize(point: CGPoint, inViewBoundsSize size: CGSize, isViewFlipped: Bool) -> CGPoint {
+    let width = max(size.width, 1)
+    let height = max(size.height, 1)
+    let xNorm = point.x / width
+    let yLocal = point.y / height
+    let yNorm = isViewFlipped ? yLocal : (1 - yLocal)
+    return CGPoint(
+      x: max(0, min(1, xNorm)),
+      y: max(0, min(1, yNorm))
+    )
+  }
+}
+
 /// Layer-backed highlight overlay. Added as a subview of TartVirtualMachineView
 /// so its CALayer composites on top of Metal rendering. hitTest returns nil so
 /// it is completely transparent to pointer events.
@@ -1082,6 +1103,18 @@ class VMContainerView: NSView {
     guard let dropZoneURL = machineView.dropZoneURL else { return false }
     let urls = fileURLs(from: sender)
     guard !urls.isEmpty else { return false }
+
+    // Compute the drop location in normalized view coordinates while we're
+    // still on the main thread (dragging info is only valid here). The
+    // forthcoming guest-side drop synthesis uses this to place files where
+    // the user actually pointed instead of in a generic share folder.
+    let localPoint = self.convert(sender.draggingLocation, from: nil)
+    let normalizedPoint = DropGeometry.normalize(
+      point: localPoint,
+      inViewBoundsSize: self.bounds.size,
+      isViewFlipped: self.isFlipped
+    )
+
     // Copy off the main thread: large files would otherwise freeze the VM
     // window (which is the same view that's rendering the VM's framebuffer).
     copyQueue.async {
@@ -1092,6 +1125,15 @@ class VMContainerView: NSView {
             try FileManager.default.removeItem(at: dest)
           }
           try FileManager.default.copyItem(at: url, to: dest)
+
+          // After the file lands in the shared drop zone, ask the guest agent
+          // to perform a real drop at the cursor's normalized position. Today
+          // this is a no-op (returns false) so the user-visible result remains
+          // "file appears in /Volumes/My Shared Files/Dropped Files/".
+          let destPath = dest.path
+          Task {
+            _ = await synthesizeGuestDrop(path: destPath, atNormalized: normalizedPoint)
+          }
         } catch {
           let name = url.lastPathComponent
           let message = error.localizedDescription
@@ -1114,6 +1156,30 @@ class VMContainerView: NSView {
       options: [.urlReadingFileURLsOnly: true]
     ) as? [URL] ?? []
   }
+}
+
+/// Asks the in-guest tart-guest-agent to perform a drag-and-drop of `path` at
+/// the given normalized coordinates (origin top-left, (1, 1) bottom-right) so
+/// that whatever window the cursor is over receives the file as a real drop.
+///
+/// Returns true if the guest agent reports a successful drop; in that case the
+/// caller treats the share-folder copy as a side effect rather than the
+/// user-visible result. Returns false when the agent is unreachable, returns
+/// an error, or the corresponding RPC isn't available — the caller's existing
+/// fallback (file accessible at /Volumes/My Shared Files/Dropped Files/) then
+/// remains the user-visible outcome.
+///
+/// Today this is a no-op stub. Wiring it up requires:
+///   1. A new `DragAndDrop` RPC in tart-guest-agent-proto.
+///   2. A handler in tart-guest-agent (likely NSView.beginDraggingSession from
+///      a hidden 1x1 NSWindow at the cursor's screen position, with an
+///      AppleScript-into-Finder fallback).
+///   3. Pulling the running VM's controlSocketURL into the call site (cf.
+///      Exec.swift) and reusing the existing AgentAsyncClient pattern.
+private func synthesizeGuestDrop(path: String, atNormalized normalized: CGPoint) async -> Bool {
+  _ = path
+  _ = normalized
+  return false
 }
 
 struct AdditionalDisk {
