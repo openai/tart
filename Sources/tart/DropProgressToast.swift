@@ -270,22 +270,39 @@ final class DropProgressToast {
     self.cancelButton = btn
   }
 
-  /// Position the panel in the VM window's top-right corner with a small
-  /// inset. When `animated` is true (first appearance of a drop session),
-  /// the panel starts off-screen-right and slides into place over ~0.18 s,
-  /// mimicking macOS notification banners.
+  /// Position the panel just *above* the VM window's top edge, right-aligned
+  /// to the window's right edge — i.e. the toast floats outside the VM
+  /// frame, like a macOS notification banner perched on top of the app.
+  /// When `animated` is true (first appearance of a drop session) the panel
+  /// starts off-screen-right and slides into place over ~0.18 s.
+  ///
+  /// If the VM window is jammed against the top of the screen and there
+  /// isn't room for the toast above it, we fall back to sitting inside the
+  /// window's top-right corner so the toast never clips the menu bar.
   private func positionPanel(animated: Bool) {
     guard let panel = panel, let parent = anchorWindow else { return }
     let parentFrame = parent.frame
     let size = panel.frame.size
-    let rightInset: CGFloat = 16
-    // Clear the titlebar plus a bit of breathing room.
-    let topInset: CGFloat = 50
+    let rightInset: CGFloat = 8   // align toast's right edge ~flush with window
+    let gapAbove: CGFloat = 10    // breathing room between toast and titlebar
 
-    let target = NSPoint(
-      x: parentFrame.maxX - size.width - rightInset,
-      y: parentFrame.maxY - size.height - topInset
-    )
+    // Right-aligned to the VM window's right edge.
+    let targetX = parentFrame.maxX - size.width - rightInset
+
+    // Default: bottom of toast `gapAbove` above the top of the VM window.
+    var targetY = parentFrame.maxY + gapAbove
+
+    // Clamp so the toast never overlaps the menu bar on the active screen.
+    if let screen = parent.screen ?? NSScreen.screens.first {
+      let menuBarBottom = screen.visibleFrame.maxY
+      if targetY + size.height > menuBarBottom {
+        // No room above: tuck into the window's top-right corner under the
+        // titlebar instead. 50 pt clears the title bar plus a bit of inset.
+        targetY = parentFrame.maxY - size.height - 50
+      }
+    }
+
+    let target = NSPoint(x: targetX, y: targetY)
 
     if animated {
       // Start off-screen to the right, then slide in.
