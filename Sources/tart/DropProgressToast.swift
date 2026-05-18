@@ -129,25 +129,35 @@ final class DropProgressToast {
   /// "Cancelled" instead of "Copy failed".
   func finish(success: Bool, cancelled: Bool = false) {
     guard let panel = panel else { return }
+    cancelButton.isEnabled = false
+    currentToken = nil
+    progressBar.stopAnimation(nil)
+
+    let hideDelay: TimeInterval
     if success {
       progressBar.isIndeterminate = false
       progressBar.doubleValue = progressBar.maxValue
-      detailLabel.stringValue = "Done"
+      // NSProgressIndicator has an undocumented ~0.3 s smooth-fill animation
+      // when doubleValue jumps. Delay "Done" until the bar visibly catches up
+      // so the text doesn't lead the fill. Extend the hide so "Done" still
+      // gets ~0.7 s of visibility once it appears.
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+        self?.detailLabel.stringValue = "Done"
+      }
+      hideDelay = 1.05
     } else if cancelled {
       detailLabel.stringValue = "Cancelled"
+      hideDelay = 0.8
     } else {
       detailLabel.stringValue = "Copy failed"
+      hideDelay = 0.8
     }
-    progressBar.stopAnimation(nil)
-    cancelButton.isEnabled = false
-    currentToken = nil
 
     let work = DispatchWorkItem { [weak self] in
       self?.hide()
     }
     hideWorkItem = work
-    // 0.8 s lets the user register the final state without lingering.
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
+    DispatchQueue.main.asyncAfter(deadline: .now() + hideDelay, execute: work)
     _ = panel
   }
 
@@ -165,6 +175,11 @@ final class DropProgressToast {
       parent.removeChildWindow(panel)
     }
     panel.orderOut(nil)
+    // Reset progress so the next drop doesn't flash the previous "Done" state
+    // and then animate from 100% → 0% as `begin` resets it.
+    progressBar.stopAnimation(nil)
+    progressBar.isIndeterminate = false
+    progressBar.doubleValue = 0
   }
 
   private func ensurePanel() {
@@ -270,51 +285,37 @@ final class DropProgressToast {
     self.cancelButton = btn
   }
 
-  /// Position the panel just *above* the VM window's top edge, right-aligned
-  /// to the window's right edge — i.e. the toast floats outside the VM
-  /// frame, like a macOS notification banner perched on top of the app.
+  /// Position the panel inside the VM window's top-right corner, just below
+  /// the titlebar, so it overlays the VM display. The toast remains a host
+  /// NSPanel (child-windowed to the VM window) but visually sits on top of
+  /// the guest content rather than floating outside the window's frame.
   /// When `animated` is true (first appearance of a drop session) the panel
-  /// starts off-screen-right and slides into place over ~0.18 s.
-  ///
-  /// If the VM window is jammed against the top of the screen and there
-  /// isn't room for the toast above it, we fall back to sitting inside the
-  /// window's top-right corner so the toast never clips the menu bar.
+  /// fades in over ~0.18 s; otherwise it snaps into place.
   private func positionPanel(animated: Bool) {
     guard let panel = panel, let parent = anchorWindow else { return }
     let parentFrame = parent.frame
     let size = panel.frame.size
-    let rightInset: CGFloat = 8   // align toast's right edge ~flush with window
-    let gapAbove: CGFloat = 10    // breathing room between toast and titlebar
+    let rightInset: CGFloat = 12  // inset from window's right edge
+    let topInset: CGFloat = 44    // clears standard titlebar + small gap
 
-    // Right-aligned to the VM window's right edge.
     let targetX = parentFrame.maxX - size.width - rightInset
+    let targetY = parentFrame.maxY - size.height - topInset
+    let targetFrame = NSRect(x: targetX, y: targetY, width: size.width, height: size.height)
 
-    // Default: bottom of toast `gapAbove` above the top of the VM window.
-    var targetY = parentFrame.maxY + gapAbove
-
-    // Clamp so the toast never overlaps the menu bar on the active screen.
-    if let screen = parent.screen ?? NSScreen.screens.first {
-      let menuBarBottom = screen.visibleFrame.maxY
-      if targetY + size.height > menuBarBottom {
-        // No room above: tuck into the window's top-right corner under the
-        // titlebar instead. 50 pt clears the title bar plus a bit of inset.
-        targetY = parentFrame.maxY - size.height - 50
-      }
-    }
-
-    let target = NSPoint(x: targetX, y: targetY)
+    panel.setFrame(targetFrame, display: true)
 
     if animated {
-      // Start off-screen to the right, then slide in.
-      let start = NSPoint(x: parentFrame.maxX + 8, y: target.y)
-      panel.setFrameOrigin(start)
+      // Fade in from transparent. `animator().alphaValue` is the documented
+      // animatable property on NSWindow (unlike setFrameOrigin, which is a
+      // silent no-op via the animator proxy).
+      panel.alphaValue = 0
       NSAnimationContext.runAnimationGroup { ctx in
         ctx.duration = 0.18
         ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        panel.animator().setFrameOrigin(target)
+        panel.animator().alphaValue = 1
       }
     } else {
-      panel.setFrameOrigin(target)
+      panel.alphaValue = 1
     }
   }
 
