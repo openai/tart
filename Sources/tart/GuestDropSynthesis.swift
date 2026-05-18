@@ -54,87 +54,87 @@ enum GuestDropSynthesis {
   /// Exit codes: 0 on success, non-zero on failure (caller treats any
   /// non-zero as "fall back to the share-folder copy that's already on disk").
   private static let relocateAndRevealScript = #"""
-    set -e
-    src=$1
-    norm_x=${2:-}
-    norm_y=${3:-}
-    if [ -z "$src" ] || [ ! -e "$src" ]; then
-      echo "tartdrop: missing or nonexistent source: $src" >&2
-      exit 2
+  set -e
+  src=$1
+  norm_x=${2:-}
+  norm_y=${3:-}
+  if [ -z "$src" ] || [ ! -e "$src" ]; then
+    echo "tartdrop: missing or nonexistent source: $src" >&2
+    exit 2
+  fi
+  name=$(basename "$src")
+  src_dir=$(dirname "$src")
+
+  # Resolve destination by where the drop landed. The agent runs in the
+  # user's GUI session so osascript goes through TCC (Automation → Finder).
+  # Suppress stderr so a denied prompt or "no windows" error doesn't pollute
+  # the agent log; an empty result means "drop on Desktop".
+  # The AppleScript body is piped to `osascript -` so we don't need a shell
+  # heredoc (whose terminator must sit at column 0 — incompatible with
+  # Swift's multi-line string indentation rules).
+  osa_script='on run argv
+    set nx to (item 1 of argv) as real
+    set ny to (item 2 of argv) as real
+    tell application "Finder"
+      set sb to bounds of window of desktop
+      set sw to (item 3 of sb) - (item 1 of sb)
+      set sh to (item 4 of sb) - (item 2 of sb)
+      set dx to (nx * sw) as integer
+      set dy to (ny * sh) as integer
+      try
+        set wins to every Finder window
+        repeat with i from 1 to count of wins
+          set w to item i of wins
+          set b to bounds of w
+          set L to (item 1 of b) as integer
+          set T to (item 2 of b) as integer
+          set R to (item 3 of b) as integer
+          set Bv to (item 4 of b) as integer
+          if (dx >= L) and (dx <= R) and (dy >= T) and (dy <= Bv) then
+            return POSIX path of ((target of w) as alias)
+          end if
+        end repeat
+        return ""
+      on error
+        return ""
+      end try
+    end tell
+  end run'
+
+  dest_dir=""
+  if [ -n "$norm_x" ] && [ -n "$norm_y" ]; then
+    dest_dir=$(printf '%s' "$osa_script" \
+      | /usr/bin/osascript - "$norm_x" "$norm_y" 2>/dev/null || true)
+    dest_dir=${dest_dir%/}
+  fi
+
+  # Empty / nonexistent / non-writable / source's own parent → bare Desktop.
+  if [ -z "$dest_dir" ] || [ ! -d "$dest_dir" ] || [ ! -w "$dest_dir" ] || [ "$dest_dir" = "$src_dir" ]; then
+    dest_dir=$HOME/Desktop
+  fi
+
+  # Pick a non-clobbering filename: "foo.txt" → "foo 2.txt", "foo 3.txt"…
+  final=$dest_dir/$name
+  if [ -e "$final" ]; then
+    stem=${name%.*}
+    ext=${name##*.}
+    if [ "$stem" = "$name" ]; then
+      i=2
+      while [ -e "$dest_dir/$name $i" ]; do i=$((i+1)); done
+      final="$dest_dir/$name $i"
+    else
+      i=2
+      while [ -e "$dest_dir/$stem $i.$ext" ]; do i=$((i+1)); done
+      final="$dest_dir/$stem $i.$ext"
     fi
-    name=$(basename "$src")
-    src_dir=$(dirname "$src")
+  fi
 
-    # Resolve destination by where the drop landed. The agent runs in the
-    # user's GUI session so osascript goes through TCC (Automation → Finder).
-    # Suppress stderr so a denied prompt or "no windows" error doesn't pollute
-    # the agent log; an empty result means "drop on Desktop".
-    # The AppleScript body is piped to `osascript -` so we don't need a shell
-    # heredoc (whose terminator must sit at column 0 — incompatible with
-    # Swift's multi-line string indentation rules).
-    osa_script='on run argv
-      set nx to (item 1 of argv) as real
-      set ny to (item 2 of argv) as real
-      tell application "Finder"
-        set sb to bounds of window of desktop
-        set sw to (item 3 of sb) - (item 1 of sb)
-        set sh to (item 4 of sb) - (item 2 of sb)
-        set dx to (nx * sw) as integer
-        set dy to (ny * sh) as integer
-        try
-          set wins to every Finder window
-          repeat with i from 1 to count of wins
-            set w to item i of wins
-            set b to bounds of w
-            set L to (item 1 of b) as integer
-            set T to (item 2 of b) as integer
-            set R to (item 3 of b) as integer
-            set Bv to (item 4 of b) as integer
-            if (dx >= L) and (dx <= R) and (dy >= T) and (dy <= Bv) then
-              return POSIX path of ((target of w) as alias)
-            end if
-          end repeat
-          return ""
-        on error
-          return ""
-        end try
-      end tell
-    end run'
-
-    dest_dir=""
-    if [ -n "$norm_x" ] && [ -n "$norm_y" ]; then
-      dest_dir=$(printf '%s' "$osa_script" \
-        | /usr/bin/osascript - "$norm_x" "$norm_y" 2>/dev/null || true)
-      dest_dir=${dest_dir%/}
-    fi
-
-    # Empty / nonexistent / non-writable / source's own parent → bare Desktop.
-    if [ -z "$dest_dir" ] || [ ! -d "$dest_dir" ] || [ ! -w "$dest_dir" ] || [ "$dest_dir" = "$src_dir" ]; then
-      dest_dir=$HOME/Desktop
-    fi
-
-    # Pick a non-clobbering filename: "foo.txt" → "foo 2.txt", "foo 3.txt"…
-    final=$dest_dir/$name
-    if [ -e "$final" ]; then
-      stem=${name%.*}
-      ext=${name##*.}
-      if [ "$stem" = "$name" ]; then
-        i=2
-        while [ -e "$dest_dir/$name $i" ]; do i=$((i+1)); done
-        final="$dest_dir/$name $i"
-      else
-        i=2
-        while [ -e "$dest_dir/$stem $i.$ext" ]; do i=$((i+1)); done
-        final="$dest_dir/$stem $i.$ext"
-      fi
-    fi
-
-    mv -- "$src" "$final"
-    /usr/bin/open -R "$final"
-    # Last line of stdout is the destination folder's basename so the host
-    # can show "Copied to Desktop" / "Copied to Documents" in the toast.
-    printf 'tartdrop-dest=%s\n' "$(basename "$dest_dir")"
-    """#
+  mv -- "$src" "$final"
+  /usr/bin/open -R "$final"
+  # Last line of stdout is the destination folder's basename so the host
+  # can show "Copied to Desktop" / "Copied to Documents" in the toast.
+  printf 'tartdrop-dest=%s\n' "$(basename "$dest_dir")"
+  """#
 
   static func perform(
     controlSocketURL: URL,
