@@ -54,6 +54,12 @@ final class DropProgressToast {
   private var cancelButton: NSButton!
   private var hideWorkItem: DispatchWorkItem?
   private weak var anchorWindow: NSWindow?
+  /// Text that the delayed-final-text work item should apply when it fires.
+  /// finish() sets this to "Done", setFinalDestination() upgrades it to
+  /// "Copied to <folder>" — whichever value is current at +0.35 s wins, so a
+  /// fast relocation result doesn't get clobbered by the placeholder.
+  private var pendingFinalText: String = ""
+  private var didApplyFinalText: Bool = false
 
   /// Cancellation token for the copy currently driving the toast. Cleared
   /// once the user clicks ⊗ or `finish` is called, so a late click after the
@@ -124,10 +130,33 @@ final class DropProgressToast {
     detailLabel.stringValue = formatDetail(copied: copied, total: total, index: index, count: count)
   }
 
+  /// Called once the guest-agent relocation completes (or fails) with the
+  /// basename of the folder the file is in. Upgrades the pending final text
+  /// to "Copied to <folder>" so the delayed apply uses it; if the apply
+  /// already fired (relocation was slow), patches the label directly. No-op
+  /// if the panel already hid. Pushes the hide schedule out a bit so the
+  /// new text gets time to be read.
+  func setFinalDestination(_ folderName: String) {
+    guard let panel = panel, panel.isVisible, !folderName.isEmpty else { return }
+    pendingFinalText = "Copied to \(folderName)"
+    if didApplyFinalText {
+      detailLabel.stringValue = pendingFinalText
+    }
+    hideWorkItem?.cancel()
+    let work = DispatchWorkItem { [weak self] in
+      self?.hide()
+    }
+    hideWorkItem = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.1, execute: work)
+    _ = panel
+  }
+
   /// Flash a final state and schedule the panel to hide. Pass `cancelled:
   /// true` when the copy ended because the user clicked ⊗; that surfaces
-  /// "Cancelled" instead of "Copy failed".
-  func finish(success: Bool, cancelled: Bool = false) {
+  /// "Cancelled" instead of "Copy failed". `destinationFolder` (only honored
+  /// on success) is the basename of the folder the file ended up in — shown
+  /// as "Copied to <folder>" so the user knows where their file is.
+  func finish(success: Bool, destinationFolder: String? = nil, cancelled: Bool = false) {
     guard let panel = panel else { return }
     cancelButton.isEnabled = false
     currentToken = nil
@@ -138,13 +167,24 @@ final class DropProgressToast {
       progressBar.isIndeterminate = false
       progressBar.doubleValue = progressBar.maxValue
       // NSProgressIndicator has an undocumented ~0.3 s smooth-fill animation
-      // when doubleValue jumps. Delay "Done" until the bar visibly catches up
-      // so the text doesn't lead the fill. Extend the hide so "Done" still
-      // gets ~0.7 s of visibility once it appears.
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-        self?.detailLabel.stringValue = "Done"
+      // when doubleValue jumps. Delay the final text until the bar visibly
+      // catches up so the text doesn't lead the fill. setFinalDestination
+      // may upgrade `pendingFinalText` to "Copied to <folder>" in that
+      // window; the work item picks up whatever value is current at +0.35 s.
+      if let folder = destinationFolder, !folder.isEmpty {
+        pendingFinalText = "Copied to \(folder)"
+      } else {
+        pendingFinalText = "Done"
       }
-      hideDelay = 1.05
+      didApplyFinalText = false
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+        guard let self = self else { return }
+        self.detailLabel.stringValue = self.pendingFinalText
+        self.didApplyFinalText = true
+      }
+      // 2 s baseline lets the guest-agent relocation (2 s RPC timeout) report
+      // back and `setFinalDestination` upgrade the label before we hide.
+      hideDelay = 2.0
     } else if cancelled {
       detailLabel.stringValue = "Cancelled"
       hideDelay = 0.8

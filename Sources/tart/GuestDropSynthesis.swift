@@ -4,11 +4,11 @@ import GRPC
 import Cirruslabs_TartGuestAgent_Apple_Swift
 import Cirruslabs_TartGuestAgent_Grpc_Swift
 
-enum GuestDropOutcome {
-  /// Guest agent revealed the file in Finder. A Finder window opens pointing
-  /// at the file's containing folder with the file selected, giving the user
-  /// immediate visual feedback that the drop landed.
-  case revealed
+struct GuestDropOutcome {
+  /// Basename of the folder the file was moved into, e.g. "Desktop" or
+  /// "Documents". The host shows this in the toast so the user knows where
+  /// the dropped file ended up.
+  let destinationFolderName: String
 }
 
 /// Errors that the host treats as "agent path didn't work; fall back to
@@ -96,6 +96,9 @@ enum GuestDropSynthesis {
 
     mv -- "$src" "$final"
     /usr/bin/open -R "$final"
+    # Last line of stdout is the destination folder's basename so the host
+    # can show "Copied to Desktop" / "Copied to Documents" in the toast.
+    printf 'tartdrop-dest=%s\n' "$(basename "$dest_dir")"
     """#
 
   static func perform(
@@ -127,7 +130,11 @@ enum GuestDropSynthesis {
     }
     defer { try? channel.close().wait() }
 
-    let callOptions = CallOptions(timeLimit: .timeout(.seconds(8)))
+    // 5 s: enough headroom for a first-run osascript that's blocked on a
+    // user TCC Automation prompt inside the guest, while still failing fast
+    // when the agent isn't running so the toast can show "Copied to Shared
+    // Files" before hiding. Steady-state calls finish in well under 500 ms.
+    let callOptions = CallOptions(timeLimit: .timeout(.seconds(5)))
     let client = AgentAsyncClient(channel: channel, defaultCallOptions: callOptions)
     let execCall = client.makeExecCall()
 
@@ -179,7 +186,18 @@ enum GuestDropSynthesis {
       throw GuestDropError.execFailed(exitCode: exitCode, stderr: stderr)
     }
 
-    _ = stdout
-    return .revealed
+    // Parse the `tartdrop-dest=<basename>` line the script prints after `mv`.
+    // Tolerate other stdout (a future agent build might add a banner) by
+    // scanning lines instead of demanding an exact match.
+    var folderName: String?
+    for line in stdout.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
+      if line.hasPrefix("tartdrop-dest=") {
+        folderName = String(line.dropFirst("tartdrop-dest=".count))
+      }
+    }
+    guard let dest = folderName, !dest.isEmpty else {
+      throw GuestDropError.unexpectedOutput(stdout)
+    }
+    return GuestDropOutcome(destinationFolderName: dest)
   }
 }

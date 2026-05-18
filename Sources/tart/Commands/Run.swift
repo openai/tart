@@ -1176,21 +1176,24 @@ class VMContainerView: NSView {
             }
           }
 
+          // Show the final state immediately so the toast doesn't sit there
+          // waiting on the guest agent. The relocation runs concurrently and
+          // patches the destination text into the toast if it returns while
+          // the panel is still visible — otherwise the user just sees "Done".
           DispatchQueue.main.async {
             DropProgressToast.shared.finish(success: true)
           }
 
-          // After the file lands in the shared drop zone, ask the guest agent
-          // to make the drop visible — Finder-window duplicate when possible,
-          // reveal-in-Finder otherwise. If the agent isn't reachable, the
-          // file in the share folder is still the fallback.
           let destPath = dest.path
           Task {
-            _ = await synthesizeGuestDrop(
+            let folder = await synthesizeGuestDrop(
               hostFilePath: destPath,
               atNormalized: normalizedPoint,
               controlSocketURL: controlSocketURL
             )
+            await MainActor.run {
+              DropProgressToast.shared.setFinalDestination(folder)
+            }
           }
         } catch is DropCopyCancelled {
           // User clicked ⊗: remove the partial destination so the share
@@ -1242,13 +1245,23 @@ class VMContainerView: NSView {
 /// Finder or got revealed). On any failure — agent unreachable, no guest
 /// agent installed, AppleScript erroring — returns false so the caller's
 /// existing share-folder behavior remains the user-visible result.
+/// Box that lets a sync copyQueue thread receive a value written by an async
+/// Task. The semaphore round-trip provides happens-before ordering.
+final class DropFolderBox: @unchecked Sendable {
+  var value: String = "Shared Files"
+}
+
+/// Asks the in-guest agent to relocate the dropped file, returning the basename
+/// of the destination folder so the toast can show "Copied to Desktop" etc.
+/// On agent failure the file remains in the share folder and we return
+/// `"Shared Files"` so the user still sees a sensible destination.
 private func synthesizeGuestDrop(
   hostFilePath: String,
   atNormalized normalized: CGPoint,
   controlSocketURL: URL?
-) async -> Bool {
+) async -> String {
   _ = normalized
-  guard let controlSocketURL = controlSocketURL else { return false }
+  guard let controlSocketURL = controlSocketURL else { return "Shared Files" }
 
   let filename = (hostFilePath as NSString).lastPathComponent
   let guestPath = "/Volumes/My Shared Files/Dropped Files/" + filename
@@ -1258,10 +1271,9 @@ private func synthesizeGuestDrop(
       controlSocketURL: controlSocketURL,
       guestFilePath: guestPath
     )
-    _ = outcome
-    return true
+    return outcome.destinationFolderName
   } catch {
-    return false
+    return "Shared Files"
   }
 }
 
