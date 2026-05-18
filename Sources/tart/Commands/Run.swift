@@ -1260,7 +1260,6 @@ private func synthesizeGuestDrop(
   atNormalized normalized: CGPoint,
   controlSocketURL: URL?
 ) async -> String {
-  _ = normalized
   guard let controlSocketURL = controlSocketURL else { return "Shared Files" }
 
   let filename = (hostFilePath as NSString).lastPathComponent
@@ -1269,10 +1268,12 @@ private func synthesizeGuestDrop(
   do {
     let outcome = try await GuestDropSynthesis.perform(
       controlSocketURL: controlSocketURL,
-      guestFilePath: guestPath
+      guestFilePath: guestPath,
+      normalizedDropPoint: normalized
     )
     return outcome.destinationFolderName
   } catch {
+    NSLog("[GuestDrop] relocate failed for \(guestPath): \(error)")
     return "Shared Files"
   }
 }

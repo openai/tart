@@ -37,15 +37,27 @@ enum GuestDropError: Error {
 /// Files"), we fall back to `~/Desktop`. The file is finally revealed with
 /// `open -R` so Finder pops a window with it selected.
 enum GuestDropSynthesis {
-  /// Shell script body executed inside the guest. The dropped file's guest
-  /// path is passed as `$1` via the `sh -c CMD -- $1` convention (with
-  /// `tartdrop` as `$0` so error messages identify us).
+  /// Shell script body executed inside the guest. Args:
+  ///   $1 = guest path of the just-copied file (in the share)
+  ///   $2 = drop X, normalized 0..1, top-left origin (optional)
+  ///   $3 = drop Y, normalized 0..1, top-left origin (optional)
+  /// `$0` is set to "tartdrop" so error messages identify us.
+  ///
+  /// The script picks the destination by *position*: it converts the
+  /// normalized drop point into guest-screen pixels and asks Finder which of
+  /// its open windows contains that point. If no Finder window does (i.e. the
+  /// user dropped on bare Desktop), the file goes to ~/Desktop. The front
+  /// window is intentionally *not* the default fallback — dropping on the
+  /// Desktop while a Downloads window happens to be frontmost should land on
+  /// the Desktop, not in Downloads.
   ///
   /// Exit codes: 0 on success, non-zero on failure (caller treats any
   /// non-zero as "fall back to the share-folder copy that's already on disk").
   private static let relocateAndRevealScript = #"""
     set -e
     src=$1
+    norm_x=${2:-}
+    norm_y=${3:-}
     if [ -z "$src" ] || [ ! -e "$src" ]; then
       echo "tartdrop: missing or nonexistent source: $src" >&2
       exit 2
@@ -53,27 +65,50 @@ enum GuestDropSynthesis {
     name=$(basename "$src")
     src_dir=$(dirname "$src")
 
-    # Ask Finder for the frontmost window's folder. Suppress stderr so a TCC
-    # denial or "no windows" error doesn't pollute the agent log; we detect
-    # those by an empty result. The agent runs in the user's GUI session, so
-    # osascript here goes through the user's TCC consent (Automation→Finder).
-    dest_dir=$(/usr/bin/osascript <<'OSA' 2>/dev/null || true
-    tell application "Finder"
-      if (count of Finder windows) is 0 then return ""
-      try
-        return POSIX path of (target of front Finder window as alias)
-      on error
-        return ""
-      end try
-    end tell
-    OSA
-    )
-    # AppleScript appends a trailing slash to folder POSIX paths.
-    dest_dir=${dest_dir%/}
+    # Resolve destination by where the drop landed. The agent runs in the
+    # user's GUI session so osascript goes through TCC (Automation → Finder).
+    # Suppress stderr so a denied prompt or "no windows" error doesn't pollute
+    # the agent log; an empty result means "drop on Desktop".
+    # The AppleScript body is piped to `osascript -` so we don't need a shell
+    # heredoc (whose terminator must sit at column 0 — incompatible with
+    # Swift's multi-line string indentation rules).
+    osa_script='on run argv
+      set nx to (item 1 of argv) as real
+      set ny to (item 2 of argv) as real
+      tell application "Finder"
+        set sb to bounds of window of desktop
+        set sw to (item 3 of sb) - (item 1 of sb)
+        set sh to (item 4 of sb) - (item 2 of sb)
+        set dx to (nx * sw) as integer
+        set dy to (ny * sh) as integer
+        try
+          set wins to every Finder window
+          repeat with i from 1 to count of wins
+            set w to item i of wins
+            set b to bounds of w
+            set L to (item 1 of b) as integer
+            set T to (item 2 of b) as integer
+            set R to (item 3 of b) as integer
+            set Bv to (item 4 of b) as integer
+            if (dx >= L) and (dx <= R) and (dy >= T) and (dy <= Bv) then
+              return POSIX path of ((target of w) as alias)
+            end if
+          end repeat
+          return ""
+        on error
+          return ""
+        end try
+      end tell
+    end run'
 
-    # Reject empty / nonexistent / non-writable destinations, and reject the
-    # source's own parent (which would either be a no-op rename or leave us
-    # putting the file right back into "Dropped Files").
+    dest_dir=""
+    if [ -n "$norm_x" ] && [ -n "$norm_y" ]; then
+      dest_dir=$(printf '%s' "$osa_script" \
+        | /usr/bin/osascript - "$norm_x" "$norm_y" 2>/dev/null || true)
+      dest_dir=${dest_dir%/}
+    fi
+
+    # Empty / nonexistent / non-writable / source's own parent → bare Desktop.
     if [ -z "$dest_dir" ] || [ ! -d "$dest_dir" ] || [ ! -w "$dest_dir" ] || [ "$dest_dir" = "$src_dir" ]; then
       dest_dir=$HOME/Desktop
     fi
@@ -103,7 +138,8 @@ enum GuestDropSynthesis {
 
   static func perform(
     controlSocketURL: URL,
-    guestFilePath: String
+    guestFilePath: String,
+    normalizedDropPoint: CGPoint? = nil
   ) async throws -> GuestDropOutcome {
     let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
     defer { try? group.syncShutdownGracefully() }
@@ -138,13 +174,18 @@ enum GuestDropSynthesis {
     let client = AgentAsyncClient(channel: channel, defaultCallOptions: callOptions)
     let execCall = client.makeExecCall()
 
-    // Pass the guest path as $1 (with "tartdrop" as $0 so error messages
-    // identify us). The script does the Finder-window lookup, picks a
-    // destination, moves the file out of "Dropped Files", and reveals it.
+    // Pass guest path as $1 and, if available, the normalized drop point as
+    // $2/$3 so the script can pick the Finder window under the cursor instead
+    // of the frontmost one. "tartdrop" is $0 so error messages identify us.
+    var scriptArgs = ["tartdrop", guestFilePath]
+    if let point = normalizedDropPoint {
+      scriptArgs.append(String(format: "%.6f", point.x))
+      scriptArgs.append(String(format: "%.6f", point.y))
+    }
     let command = ExecRequest.with {
       $0.type = .command(ExecRequest.Command.with {
         $0.name = "/bin/sh"
-        $0.args = ["-c", relocateAndRevealScript, "tartdrop", guestFilePath]
+        $0.args = ["-c", relocateAndRevealScript] + scriptArgs
         $0.interactive = false
         $0.tty = false
       })
