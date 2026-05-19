@@ -41,16 +41,24 @@ final class RelocationGate {
   }
 }
 
-/// Owns one VM window's drag-and-drop pipeline: copies dragged files (and
-/// file promises, and folders/.app bundles) into a per-file subdirectory of
+/// No promised file could be received (every provider errored or timed out).
+struct DropPromiseFailed: LocalizedError {
+  var errorDescription: String? { "the source app didn't provide the file" }
+}
+
+/// Owns one VM window's drag-and-drop pipeline: brings dragged files (and
+/// folders/.app bundles, and file promises) into a per-item subdirectory of
 /// the shared drop zone, drives the progress toast, then asks the guest agent
-/// to relocate each file under the cursor.
+/// to relocate them under the cursor.
 ///
 /// Design notes addressing prior edge cases:
-/// - Each file gets its own `dropRoot/<uuid>/` subdir, so same-named files in
+/// - Each item gets its own `dropRoot/<uuid>/` subdir, so same-named files in
 ///   one gesture (or rapid re-drops) never collide on the share path.
-/// - `DropProgressCopier.copyTree` handles directories and removes partial
-///   output on any failure, so a half-written item is never visible to guest.
+/// - Plain file/dir drags stream through `DropProgressCopier.copyTree`, which
+///   handles directories and removes partial output on any failure, so a
+///   half-written item is never visible to the guest.
+/// - File promises are received *directly into* their subdir, so they are
+///   written once by the source app — no host-side staging-then-copy.
 /// - Relocations run one-at-a-time on a serial queue and register with
 ///   `RelocationGate`, bounding guest RPC/TCC pressure and making teardown
 ///   safe.
@@ -58,6 +66,11 @@ final class RelocationGate {
 /// - On non-macOS guests (or when the control socket is unavailable) the
 ///   relocation step is skipped and the toast says so honestly.
 final class DropHandler {
+  private enum Item {
+    case file(URL)
+    case promise(NSFilePromiseReceiver)
+  }
+
   private let dropRoot: URL
   private let controlSocketURL: URL?
   private let isMacGuest: Bool
@@ -82,42 +95,63 @@ final class DropHandler {
   ) {
     let cancelToken = DropCancellationToken()
     let box = WindowBox(parentWindow)
+    let items: [Item] = fileURLs.map(Item.file) + promiseReceivers.map(Item.promise)
+    guard !items.isEmpty else { return }
 
     copyQueue.async { [self] in
-      var sources = fileURLs
-      sources.append(contentsOf: resolvePromisedFiles(promiseReceivers, token: cancelToken))
-      guard !sources.isEmpty else { return }
-
       var failures: [String] = []
-      let total = sources.count
+      let total = items.count
 
-      for (idx, src) in sources.enumerated() {
+      for (idx, item) in items.enumerated() {
         if cancelToken.isCancelled { break }
 
         let sessionID = DropSession.next()
-        let name = src.lastPathComponent
         let subdir = dropRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let dest = subdir.appendingPathComponent(name)
-        let totalBytes = DropProgressCopier.totalSize(of: src)
-
-        DispatchQueue.main.async {
-          DropProgressToast.shared.begin(
-            parent: box.window, filename: name, totalBytes: totalBytes,
-            index: idx + 1, count: total, cancelToken: cancelToken, sessionID: sessionID
-          )
+        // Display name is known up front for both kinds; a promise provider
+        // may de-duplicate on write, so relocation uses the *actual* names.
+        let displayName: String
+        switch item {
+        case .file(let src): displayName = src.lastPathComponent
+        case .promise(let r): displayName = r.fileNames.first ?? "Dropped file"
         }
 
         do {
           try FileManager.default.createDirectory(at: subdir, withIntermediateDirectories: true)
-          try DropProgressCopier.copyTree(
-            from: src, to: dest, totalBytes: totalBytes, token: cancelToken
-          ) { copied in
+
+          let writtenNames: [String]
+          switch item {
+          case .file(let src):
+            let dest = subdir.appendingPathComponent(displayName)
+            let totalBytes = DropProgressCopier.totalSize(of: src)
             DispatchQueue.main.async {
-              DropProgressToast.shared.update(
-                copied: copied, total: totalBytes,
-                index: idx + 1, count: total, sessionID: sessionID
+              DropProgressToast.shared.begin(
+                parent: box.window, filename: displayName, totalBytes: totalBytes,
+                index: idx + 1, count: total, cancelToken: cancelToken, sessionID: sessionID
               )
             }
+            try DropProgressCopier.copyTree(
+              from: src, to: dest, totalBytes: totalBytes, token: cancelToken
+            ) { copied in
+              DispatchQueue.main.async {
+                DropProgressToast.shared.update(
+                  copied: copied, total: totalBytes,
+                  index: idx + 1, count: total, sessionID: sessionID
+                )
+              }
+            }
+            writtenNames = [displayName]
+
+          case .promise(let receiver):
+            // Promises carry no byte progress; totalBytes 0 → indeterminate
+            // bar while the source app writes straight into the share.
+            DispatchQueue.main.async {
+              DropProgressToast.shared.begin(
+                parent: box.window, filename: displayName, totalBytes: 0,
+                index: idx + 1, count: total, cancelToken: cancelToken, sessionID: sessionID
+              )
+            }
+            writtenNames = try receivePromise(receiver, into: subdir, token: cancelToken)
+              .map { $0.lastPathComponent }
           }
 
           let waiting = relocationPossible
@@ -129,7 +163,9 @@ final class DropHandler {
               sessionID: sessionID
             )
           }
-          relocate(subdir: subdir, fileName: name, normalizedPoint: normalizedPoint, sessionID: sessionID)
+          for name in writtenNames {
+            relocate(subdir: subdir, fileName: name, normalizedPoint: normalizedPoint, sessionID: sessionID)
+          }
         } catch is DropCopyCancelled {
           try? FileManager.default.removeItem(at: subdir)
           DispatchQueue.main.async {
@@ -137,10 +173,10 @@ final class DropHandler {
           }
           break
         } catch {
-          // copyTree already removed the partial output; drop the now-empty
-          // subdir too and remember the failure for one combined alert.
+          // copyTree already removed any partial output; drop the subdir too
+          // and remember the failure for one combined alert.
           try? FileManager.default.removeItem(at: subdir)
-          failures.append("\(name): \(error.localizedDescription)")
+          failures.append("\(displayName): \(error.localizedDescription)")
           DispatchQueue.main.async {
             DropProgressToast.shared.finish(success: false, sessionID: sessionID)
           }
@@ -197,11 +233,16 @@ final class DropHandler {
       }
       sem.wait()
 
-      // Successful relocation `mv`s the file out of the share (a cross-FS
-      // move that unlinks the host-side source), leaving an empty subdir to
-      // reap. On failure the file stays put for the user to find.
+      // A successful relocation `mv`s the file out of the share (a cross-FS
+      // move that unlinks the host-side source). Reap the subdir only once
+      // it's empty, so a multi-file promise sharing one subdir isn't deleted
+      // out from under its still-pending siblings. On failure the file stays
+      // put for the user to find.
       if moved {
-        try? FileManager.default.removeItem(at: subdir)
+        let remaining = (try? FileManager.default.contentsOfDirectory(atPath: subdir.path)) ?? []
+        if remaining.isEmpty {
+          try? FileManager.default.removeItem(at: subdir)
+        }
       }
       let resolved = folder
       DispatchQueue.main.async {
@@ -212,48 +253,44 @@ final class DropHandler {
 
   // MARK: - File promises (drags from Photos, Mail, browsers, …)
 
-  /// Materializes `NSFilePromiseReceiver`s into a host-private staging dir and
-  /// returns the written file URLs so they flow through the same copy path as
-  /// plain file drags. Best-effort: anything that errors or times out is
-  /// skipped (the drop just yields fewer files, never a crash).
-  private func resolvePromisedFiles(
-    _ receivers: [NSFilePromiseReceiver],
+  /// Receives `receiver`'s promised files *directly into* `subdir` (which is
+  /// already the shared drop-zone location), so the source app writes them
+  /// exactly once — no host-side staging-then-copy. Returns the URLs actually
+  /// written. Throws `DropCopyCancelled` if the user cancelled, or
+  /// `DropPromiseFailed` if the provider produced nothing.
+  private func receivePromise(
+    _ receiver: NSFilePromiseReceiver,
+    into subdir: URL,
     token: DropCancellationToken
-  ) -> [URL] {
-    guard !receivers.isEmpty else { return [] }
-
-    let staging = FileManager.default.temporaryDirectory
-      .appendingPathComponent("tart-drop-promise-\(UUID().uuidString)", isDirectory: true)
-    guard (try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)) != nil else {
-      return []
-    }
-
+  ) throws -> [URL] {
     let opQueue = OperationQueue()
     let lock = NSLock()
     var urls: [URL] = []
+    var firstError: Error?
     let sem = DispatchSemaphore(value: 0)
-    let expected = receivers.reduce(0) { $0 + max(1, $1.fileNames.count) }
+    let expected = max(1, receiver.fileNames.count)
 
-    for receiver in receivers {
-      receiver.receivePromisedFiles(atDestination: staging, options: [:], operationQueue: opQueue) { url, error in
-        if error == nil {
-          lock.lock()
-          urls.append(url)
-          lock.unlock()
-        }
-        sem.signal()
+    receiver.receivePromisedFiles(atDestination: subdir, options: [:], operationQueue: opQueue) { url, error in
+      lock.lock()
+      if let error = error {
+        if firstError == nil { firstError = error }
+      } else {
+        urls.append(url)
       }
+      lock.unlock()
+      sem.signal()
     }
 
-    // 30 s headroom for first-run providers (e.g. Photos exporting originals)
-    // while still failing fast if a provider never calls back.
+    // 30 s headroom per file for first-run providers (e.g. Photos exporting
+    // originals) while still failing fast if a provider never calls back.
     for _ in 0..<expected {
-      if token.isCancelled { break }
+      if token.isCancelled { throw DropCopyCancelled() }
       if sem.wait(timeout: .now() + 30) == .timedOut { break }
     }
 
     lock.lock()
     defer { lock.unlock() }
+    if urls.isEmpty { throw firstError ?? DropPromiseFailed() }
     return urls
   }
 }
