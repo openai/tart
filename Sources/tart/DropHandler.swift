@@ -32,9 +32,10 @@ final class RelocationGate {
   /// Wait up to `timeout` seconds for outstanding relocations. Bridged off
   /// the caller's actor so it never blocks the main thread.
   func drain(timeout: TimeInterval) async {
+    let group = self.group
     await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
       DispatchQueue.global().async {
-        _ = self.group.wait(timeout: .now() + timeout)
+        _ = group.wait(timeout: .now() + timeout)
         cont.resume()
       }
     }
@@ -142,16 +143,23 @@ final class DropHandler {
             writtenNames = [displayName]
 
           case .promise(let receiver):
-            // Promises carry no byte progress; totalBytes 0 → indeterminate
-            // bar while the source app writes straight into the share.
+            // The promise API exposes no total size, so the bar stays
+            // indeterminate; the detail line shows the live byte count we
+            // poll off the (shared) subdir as the source app streams in.
             DispatchQueue.main.async {
               DropProgressToast.shared.begin(
                 parent: box.window, filename: displayName, totalBytes: 0,
                 index: idx + 1, count: total, cancelToken: cancelToken, sessionID: sessionID
               )
             }
-            writtenNames = try receivePromise(receiver, into: subdir, token: cancelToken)
-              .map { $0.lastPathComponent }
+            writtenNames = try receivePromise(receiver, into: subdir, token: cancelToken) { copied in
+              DispatchQueue.main.async {
+                DropProgressToast.shared.update(
+                  copied: copied, total: 0,
+                  index: idx + 1, count: total, sessionID: sessionID
+                )
+              }
+            }.map { $0.lastPathComponent }
           }
 
           let waiting = relocationPossible
@@ -258,17 +266,53 @@ final class DropHandler {
   /// exactly once — no host-side staging-then-copy. Returns the URLs actually
   /// written. Throws `DropCopyCancelled` if the user cancelled, or
   /// `DropPromiseFailed` if the provider produced nothing.
+  ///
+  /// `progress` is fed the bytes streamed into `subdir` so far, polled while
+  /// the receive is in flight — the `NSFilePromiseReceiver` API itself
+  /// reports nothing until each file is fully written. Best-effort: a
+  /// provider that writes to a temp path and atomically renames into place
+  /// only becomes visible at the end.
   private func receivePromise(
     _ receiver: NSFilePromiseReceiver,
     into subdir: URL,
-    token: DropCancellationToken
+    token: DropCancellationToken,
+    progress: @escaping (Int64) -> Void
   ) throws -> [URL] {
     let opQueue = OperationQueue()
     let lock = NSLock()
     var urls: [URL] = []
     var firstError: Error?
+    var polling = true
     let sem = DispatchSemaphore(value: 0)
     let expected = max(1, receiver.fileNames.count)
+
+    // B: receivePromisedFiles has no cancellation parameter. On ⊗, cancel the
+    // operation queue (cooperative providers honor it) and wake the wait loop
+    // immediately instead of sitting on the 30 s timeout.
+    token.onCancel {
+      opQueue.cancelAllOperations()
+      for _ in 0..<expected { sem.signal() }
+    }
+
+    // A: poll bytes-on-disk so the toast shows a live, honest size during the
+    // opaque receive. Stops via `polling` on any exit (the defer below).
+    let pollQueue = DispatchQueue(label: "org.cirruslabs.tart.dragdrop-promise-poll")
+    func schedulePoll() {
+      pollQueue.asyncAfter(deadline: .now() + 0.15) {
+        lock.lock()
+        let go = polling
+        lock.unlock()
+        guard go else { return }
+        progress(DropProgressCopier.totalSize(of: subdir))
+        schedulePoll()
+      }
+    }
+    schedulePoll()
+    defer {
+      lock.lock()
+      polling = false
+      lock.unlock()
+    }
 
     receiver.receivePromisedFiles(atDestination: subdir, options: [:], operationQueue: opQueue) { url, error in
       lock.lock()
@@ -287,11 +331,14 @@ final class DropHandler {
       if token.isCancelled { throw DropCopyCancelled() }
       if sem.wait(timeout: .now() + 30) == .timedOut { break }
     }
+    if token.isCancelled { throw DropCopyCancelled() }
 
     lock.lock()
-    defer { lock.unlock() }
-    if urls.isEmpty { throw firstError ?? DropPromiseFailed() }
-    return urls
+    let result = urls
+    let err = firstError
+    lock.unlock()
+    if result.isEmpty { throw err ?? DropPromiseFailed() }
+    return result
   }
 }
 
