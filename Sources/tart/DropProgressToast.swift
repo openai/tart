@@ -10,15 +10,11 @@ import Foundation
 /// All methods MUST be called on the main thread. Callers driving copies
 /// from a background queue should hop via `DispatchQueue.main.async` first.
 ///
-/// Lifecycle per file:
-///   begin(...)                  -> panel appears (or retargets) and slides
-///                                  in if it wasn't already visible
-///   update(...)                 -> bar advances; no-op if not visible
-///   finish(success:cancelled:)  -> brief "Done"/"Cancelled"/"Copy failed"
-///                                  state, then auto-hide after ~0.8 s
-///
-/// Multiple files dropped in one gesture serially reuse the same panel and
-/// increment the [i/N] counter without re-animating.
+/// Every file gets a monotonically increasing `sessionID` (see
+/// `DropSession.next()`). `update`/`finish`/`setFinalDestination` ignore any
+/// call whose `sessionID` is not the one the most recent `begin` installed,
+/// so a slow guest-relocation result for file 1 can't clobber or hide the
+/// toast while file 2 of the same drop is still copying.
 ///
 /// AppKit panel construction, positioning, and detail-string formatting live
 /// in `DropProgressToast+Panel.swift`.
@@ -39,6 +35,10 @@ final class DropProgressToast {
   private var pendingFinalText: String = ""
   private var didApplyFinalText: Bool = false
 
+  /// Identifies the file currently driving the toast. Stale callbacks (from a
+  /// previous file's async relocation) carry an older id and are ignored.
+  private var currentSessionID: Int = -1
+
   /// Cancellation token for the copy currently driving the toast. Cleared
   /// once the user clicks ⊗ or `finish` is called, so a late click after the
   /// copy already completed does nothing.
@@ -56,7 +56,8 @@ final class DropProgressToast {
     totalBytes: Int64,
     index: Int,
     count: Int,
-    cancelToken: DropCancellationToken
+    cancelToken: DropCancellationToken,
+    sessionID: Int
   ) {
     ensurePanel()
     hideWorkItem?.cancel()
@@ -66,6 +67,7 @@ final class DropProgressToast {
 
     anchorWindow = parent
     currentToken = cancelToken
+    currentSessionID = sessionID
 
     titleLabel.stringValue = filename
     detailLabel.stringValue = formatDetail(copied: 0, total: totalBytes, index: index, count: count)
@@ -98,8 +100,9 @@ final class DropProgressToast {
   }
 
   /// Update the progress bar and detail line. No-op if the panel isn't
-  /// visible (i.e. `begin` was never called or `finish` already hid it).
-  func update(copied: Int64, total: Int64, index: Int, count: Int) {
+  /// visible or the call belongs to a superseded file.
+  func update(copied: Int64, total: Int64, index: Int, count: Int, sessionID: Int) {
+    guard sessionID == currentSessionID else { return }
     guard let panel = panel, panel.isVisible else { return }
     if total > 0 {
       progressBar.isIndeterminate = false
@@ -112,9 +115,10 @@ final class DropProgressToast {
   /// basename of the folder the file is in. Upgrades the pending final text
   /// to "Copied to <folder>" so the delayed apply uses it; if the apply
   /// already fired (relocation was slow), patches the label directly. No-op
-  /// if the panel already hid. Pushes the hide schedule out a bit so the
-  /// new text gets time to be read.
-  func setFinalDestination(_ folderName: String) {
+  /// if the panel already hid or this is a stale (superseded) callback.
+  /// Schedules the (short) hide now that the real destination is known.
+  func setFinalDestination(_ folderName: String, sessionID: Int) {
+    guard sessionID == currentSessionID else { return }
     guard let panel = panel, panel.isVisible, !folderName.isEmpty else { return }
     pendingFinalText = "Copied to \(folderName)"
     if didApplyFinalText {
@@ -130,11 +134,23 @@ final class DropProgressToast {
   }
 
   /// Flash a final state and schedule the panel to hide. Pass `cancelled:
-  /// true` when the copy ended because the user clicked ⊗; that surfaces
-  /// "Cancelled" instead of "Copy failed". `destinationFolder` (only honored
-  /// on success) is the basename of the folder the file ended up in — shown
-  /// as "Copied to <folder>" so the user knows where their file is.
-  func finish(success: Bool, destinationFolder: String? = nil, cancelled: Bool = false) {
+  /// true` when the copy ended because the user clicked ⊗. `destinationFolder`
+  /// (only honored on success) is shown as "Copied to <folder>".
+  ///
+  /// When `awaitingRelocation` is true the file copied locally but the guest
+  /// agent is still being asked where it should land; we keep the toast up on
+  /// a long fallback timer (longer than the RPC's 5 s deadline) and let
+  /// `setFinalDestination` drive the real, short hide. That way the user
+  /// always sees the final destination instead of the toast vanishing at 2 s
+  /// while a slow/again-prompting agent is still working.
+  func finish(
+    success: Bool,
+    destinationFolder: String? = nil,
+    cancelled: Bool = false,
+    awaitingRelocation: Bool = false,
+    sessionID: Int
+  ) {
+    guard sessionID == currentSessionID else { return }
     guard let panel = panel else { return }
     cancelButton.isEnabled = false
     currentToken = nil
@@ -160,9 +176,10 @@ final class DropProgressToast {
         self.detailLabel.stringValue = self.pendingFinalText
         self.didApplyFinalText = true
       }
-      // 2 s baseline lets the guest-agent relocation (2 s RPC timeout) report
-      // back and `setFinalDestination` upgrade the label before we hide.
-      hideDelay = 2.0
+      // Awaiting the guest agent: hold on a fallback timer that outlives the
+      // 5 s RPC deadline; setFinalDestination cancels it and hides shortly
+      // after the real destination is known. Otherwise hide at the usual 2 s.
+      hideDelay = awaitingRelocation ? 6.5 : 2.0
     } else if cancelled {
       detailLabel.stringValue = "Cancelled"
       hideDelay = 0.8

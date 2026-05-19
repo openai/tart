@@ -570,6 +570,9 @@ struct Run: AsyncParsableCommand {
           try vncImpl.stop()
         }
 
+        // Let any in-flight guest relocation finish moving its file out of
+        // the share before we delete the drop zone underneath it.
+        await RelocationGate.shared.drain(timeout: 6)
         cleanupDropZone()
         OTel.shared.flush()
         Foundation.exit(0)
@@ -579,6 +582,7 @@ struct Run: AsyncParsableCommand {
 
         fputs("\(error)\n", stderr)
 
+        await RelocationGate.shared.drain(timeout: 6)
         cleanupDropZone()
         OTel.shared.flush()
         Foundation.exit(1)
@@ -1063,7 +1067,7 @@ class TartVirtualMachineView: VZVirtualMachineView {
 /// drag-destination table.
 class VMContainerView: NSView {
   let machineView: TartVirtualMachineView
-  private let copyQueue = DispatchQueue(label: "org.cirruslabs.tart.dragdrop-copy", qos: .userInitiated)
+  private var dropHandler: DropHandler?
 
   init(machineView: TartVirtualMachineView) {
     self.machineView = machineView
@@ -1082,14 +1086,26 @@ class VMContainerView: NSView {
 
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
-    guard window != nil, machineView.dropZoneURL != nil else { return }
-    registerForDraggedTypes([.fileURL])
+    guard window != nil, let dropZoneURL = machineView.dropZoneURL else { return }
+    if dropHandler == nil {
+      dropHandler = DropHandler(
+        dropRoot: dropZoneURL,
+        controlSocketURL: MainApp.controlSocketURL,
+        isMacGuest: vm?.config.os == .darwin
+      )
+    }
+    // Accept both real file URLs and file promises (Photos, Mail attachments,
+    // browser image drags, …) so those drops don't silently no-op.
+    let promiseTypes = NSFilePromiseReceiver.readableDraggedTypes.map { NSPasteboard.PasteboardType($0) }
+    registerForDraggedTypes([.fileURL] + promiseTypes)
   }
 
   // MARK: NSDraggingDestination
 
   override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-    guard machineView.dropZoneURL != nil, !fileURLs(from: sender).isEmpty else { return [] }
+    guard machineView.dropZoneURL != nil,
+          !fileURLs(from: sender).isEmpty || !promiseReceivers(from: sender).isEmpty
+    else { return [] }
     machineView.highlight.isActive = true
     return .copy
   }
@@ -1107,14 +1123,15 @@ class VMContainerView: NSView {
   override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { true }
 
   override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-    guard let dropZoneURL = machineView.dropZoneURL else { return false }
+    guard let dropHandler = dropHandler else { return false }
     let urls = fileURLs(from: sender)
-    guard !urls.isEmpty else { return false }
+    let promises = promiseReceivers(from: sender)
+    guard !urls.isEmpty || !promises.isEmpty else { return false }
 
     // Compute the drop location in normalized view coordinates while we're
     // still on the main thread (dragging info is only valid here). The
-    // forthcoming guest-side drop synthesis uses this to place files where
-    // the user actually pointed instead of in a generic share folder.
+    // guest-side drop synthesis uses this to place files where the user
+    // actually pointed instead of in a generic share folder.
     let localPoint = self.convert(sender.draggingLocation, from: nil)
     let normalizedPoint = DropGeometry.normalize(
       point: localPoint,
@@ -1122,104 +1139,12 @@ class VMContainerView: NSView {
       isViewFlipped: self.isFlipped
     )
 
-    // Snapshot the control socket URL and parent window on the main actor so
-    // the background Task / dispatch block can use them without crossing
-    // actor boundaries.
-    let controlSocketURL = MainApp.controlSocketURL
-    let parentWindow = self.window
-
-    // One cancellation token covers the whole drop gesture: clicking ⊗ on
-    // the toast aborts the current file AND skips any remaining files in a
-    // multi-file drop.
-    let cancelToken = DropCancellationToken()
-
-    // Copy off the main thread: large files would otherwise freeze the VM
-    // window (which is the same view that's rendering the VM's framebuffer).
-    // The toast (HUD-style progress panel) anchors to `parentWindow` so the
-    // user sees a per-file progress bar — and a cancel button — instead of
-    // a frozen UI.
-    let totalFiles = urls.count
-    copyQueue.async {
-      for (idx, url) in urls.enumerated() {
-        // Honor cancellation before starting the next file in a multi-drop.
-        if cancelToken.isCancelled { break }
-
-        let dest = dropZoneURL.appendingPathComponent(url.lastPathComponent)
-        let totalBytes = ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? Int64) ?? 0
-        let fileIndex = idx + 1
-
-        DispatchQueue.main.async {
-          DropProgressToast.shared.begin(
-            parent: parentWindow,
-            filename: url.lastPathComponent,
-            totalBytes: totalBytes,
-            index: fileIndex,
-            count: totalFiles,
-            cancelToken: cancelToken
-          )
-        }
-
-        do {
-          try DropProgressCopier.copy(
-            from: url,
-            to: dest,
-            totalBytes: totalBytes,
-            token: cancelToken
-          ) { copied in
-            DispatchQueue.main.async {
-              DropProgressToast.shared.update(
-                copied: copied,
-                total: totalBytes,
-                index: fileIndex,
-                count: totalFiles
-              )
-            }
-          }
-
-          // Show the final state immediately so the toast doesn't sit there
-          // waiting on the guest agent. The relocation runs concurrently and
-          // patches the destination text into the toast if it returns while
-          // the panel is still visible — otherwise the user just sees "Done".
-          DispatchQueue.main.async {
-            DropProgressToast.shared.finish(success: true)
-          }
-
-          let destPath = dest.path
-          Task {
-            let folder = await synthesizeGuestDrop(
-              hostFilePath: destPath,
-              atNormalized: normalizedPoint,
-              controlSocketURL: controlSocketURL
-            )
-            await MainActor.run {
-              DropProgressToast.shared.setFinalDestination(folder)
-            }
-          }
-        } catch is DropCopyCancelled {
-          // User clicked ⊗: remove the partial destination so the share
-          // folder doesn't accumulate half-copied junk, surface "Cancelled"
-          // on the toast, and skip the remaining files in this drop.
-          try? FileManager.default.removeItem(at: dest)
-          DispatchQueue.main.async {
-            DropProgressToast.shared.finish(success: false, cancelled: true)
-          }
-          break
-        } catch {
-          DispatchQueue.main.async {
-            DropProgressToast.shared.finish(success: false)
-          }
-          let name = url.lastPathComponent
-          let message = error.localizedDescription
-          DispatchQueue.main.async {
-            let alert = NSAlert()
-            alert.messageText = "Failed to copy \"\(name)\" to the VM"
-            alert.informativeText = message
-            alert.alertStyle = .warning
-            alert.runModal()
-          }
-        }
-      }
-    }
+    dropHandler.handle(
+      fileURLs: urls,
+      promiseReceivers: promises,
+      normalizedPoint: normalizedPoint,
+      parentWindow: self.window
+    )
     return true
   }
 
@@ -1229,52 +1154,12 @@ class VMContainerView: NSView {
       options: [.urlReadingFileURLsOnly: true]
     ) as? [URL] ?? []
   }
-}
 
-/// Asks the in-guest tart-guest-agent to place `hostFilePath` somewhere visible
-/// — into the frontmost Finder window if there is one, otherwise revealed in
-/// Finder. The host path is rewritten to the guest's mount of the drop share
-/// (`/Volumes/My Shared Files/Dropped Files/<filename>`) before being passed
-/// across the wire.
-///
-/// `normalizedPoint` is captured for a future RPC that actually targets the
-/// cursor's position; for now the AppleScript path uses frontmost-app
-/// heuristics and the coordinate is unused.
-///
-/// Returns true when the agent reports a visible outcome (file landed in
-/// Finder or got revealed). On any failure — agent unreachable, no guest
-/// agent installed, AppleScript erroring — returns false so the caller's
-/// existing share-folder behavior remains the user-visible result.
-/// Box that lets a sync copyQueue thread receive a value written by an async
-/// Task. The semaphore round-trip provides happens-before ordering.
-final class DropFolderBox: @unchecked Sendable {
-  var value: String = "Shared Files"
-}
-
-/// Asks the in-guest agent to relocate the dropped file, returning the basename
-/// of the destination folder so the toast can show "Copied to Desktop" etc.
-/// On agent failure the file remains in the share folder and we return
-/// `"Shared Files"` so the user still sees a sensible destination.
-private func synthesizeGuestDrop(
-  hostFilePath: String,
-  atNormalized normalized: CGPoint,
-  controlSocketURL: URL?
-) async -> String {
-  guard let controlSocketURL = controlSocketURL else { return "Shared Files" }
-
-  let filename = (hostFilePath as NSString).lastPathComponent
-  let guestPath = "/Volumes/My Shared Files/Dropped Files/" + filename
-
-  do {
-    let outcome = try await GuestDropSynthesis.perform(
-      controlSocketURL: controlSocketURL,
-      guestFilePath: guestPath,
-      normalizedDropPoint: normalized
-    )
-    return outcome.destinationFolderName
-  } catch {
-    NSLog("[GuestDrop] relocate failed for \(guestPath): \(error)")
-    return "Shared Files"
+  private func promiseReceivers(from info: NSDraggingInfo) -> [NSFilePromiseReceiver] {
+    info.draggingPasteboard.readObjects(
+      forClasses: [NSFilePromiseReceiver.self],
+      options: nil
+    ) as? [NSFilePromiseReceiver] ?? []
   }
 }
 
@@ -1434,6 +1319,13 @@ struct DirectoryShare {
       result.append(try DirectoryShare(parseFrom: rawDir))
     }
     if let dropZoneURL = dropZoneURL {
+      // "Dropped Files" is reserved for the drag-and-drop share. A user --dir
+      // with that exact name would silently clobber (or be clobbered by) it
+      // in the per-mount-tag dictionary, so reject it with a clear message
+      // instead — mirroring the unnamed-share conflict error.
+      if result.contains(where: { $0.name == "Dropped Files" }) {
+        throw ValidationError("the directory share name \"Dropped Files\" is reserved for drag-and-drop. Rename your --dir share or pass --no-drag-and-drop.")
+      }
       result.append(DirectoryShare(
         name: "Dropped Files",
         path: dropZoneURL,
@@ -1570,7 +1462,7 @@ struct DirectoryShare {
 
 extension String {
   func toRemoteOrLocalURL() -> URL {
-    if (starts(with: "https://") || starts(with: "https://")) {
+    if (starts(with: "http://") || starts(with: "https://")) {
       URL(string: self)!
     } else {
       URL(fileURLWithPath: NSString(string: self).expandingTildeInPath)

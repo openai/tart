@@ -227,18 +227,25 @@ enum GuestDropSynthesis {
       throw GuestDropError.execFailed(exitCode: exitCode, stderr: stderr)
     }
 
-    // Parse the `tartdrop-dest=<basename>` line the script prints after `mv`.
-    // Tolerate other stdout (a future agent build might add a banner) by
-    // scanning lines instead of demanding an exact match.
+    guard let dest = Self.parseDestinationFolder(stdout: stdout) else {
+      throw GuestDropError.unexpectedOutput(stdout)
+    }
+    return GuestDropOutcome(destinationFolderName: dest)
+  }
+
+  /// Pulls the `tartdrop-dest=<basename>` line the script prints after `mv`
+  /// out of the agent's stdout. Tolerates other stdout (a future agent build
+  /// might add a banner) by scanning lines instead of demanding an exact
+  /// match, and takes the *last* such line so a trailing real value wins.
+  /// Returns nil when no non-empty value is present. Pure — unit-tested.
+  static func parseDestinationFolder(stdout: String) -> String? {
     var folderName: String?
     for line in stdout.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
       if line.hasPrefix("tartdrop-dest=") {
         folderName = String(line.dropFirst("tartdrop-dest=".count))
       }
     }
-    guard let dest = folderName, !dest.isEmpty else {
-      throw GuestDropError.unexpectedOutput(stdout)
-    }
-    return GuestDropOutcome(destinationFolderName: dest)
+    guard let dest = folderName, !dest.isEmpty else { return nil }
+    return dest
   }
 }

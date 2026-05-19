@@ -147,8 +147,10 @@ extension DropProgressToast {
     let bcf = ByteCountFormatter()
     bcf.countStyle = .file
     let copiedStr = bcf.string(fromByteCount: max(0, copied))
-    let totalStr = total > 0 ? bcf.string(fromByteCount: total) : "?"
     let prefix = count > 1 ? "[\(index)/\(count)] " : ""
-    return "\(prefix)\(copiedStr) of \(totalStr)"
+    // Unknown total (stat failed / genuinely empty): show just what's copied
+    // rather than the awkward "0 bytes of ?".
+    guard total > 0 else { return "\(prefix)\(copiedStr)" }
+    return "\(prefix)\(copiedStr) of \(bcf.string(fromByteCount: total))"
   }
 }

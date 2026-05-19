@@ -144,4 +144,24 @@ final class DirectoryShareTests: XCTestCase {
     XCTAssertTrue(archiveWithNameAndOptions.readOnly)
     XCTAssertEqual(archiveWithNameAndOptions.mountTag, "sometag")
   }
+
+  // "Dropped Files" is reserved for the drag-and-drop share: a user --dir
+  // with that exact name would silently clobber it, so collect() rejects it
+  // when the drop zone is active.
+  func testReservedDroppedFilesNameRejectedWithDropZone() throws {
+    let url = URL(filePath: "/tmp/dropzone-test")
+    XCTAssertThrowsError(
+      try DirectoryShare.collect(
+        dirArgs: ["Dropped Files:/Users/admin/stuff"],
+        dropZoneURL: url
+      )
+    )
+  }
+
+  // Without drag-and-drop active the name carries no special meaning.
+  func testDroppedFilesNameAllowedWithoutDropZone() throws {
+    let shares = try DirectoryShare.collect(dirArgs: ["Dropped Files:/Users/admin/stuff"])
+    XCTAssertEqual(shares.count, 1)
+    XCTAssertEqual(shares[0].name, "Dropped Files")
+  }
 }
