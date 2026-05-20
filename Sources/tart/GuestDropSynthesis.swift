@@ -239,8 +239,10 @@ enum GuestDropSynthesis {
   /// match, and takes the *last* such line so a trailing real value wins.
   /// Returns nil when no non-empty value is present. Pure — unit-tested.
   static func parseDestinationFolder(stdout: String) -> String? {
+    // enumerateLines handles LF, CR, and CRLF — split(whereSeparator:) misses
+    // CRLF because Swift treats "\r\n" as a single Character.
     var folderName: String?
-    for line in stdout.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
+    stdout.enumerateLines { line, _ in
       if line.hasPrefix("tartdrop-dest=") {
         folderName = String(line.dropFirst("tartdrop-dest=".count))
       }
