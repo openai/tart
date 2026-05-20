@@ -61,10 +61,14 @@ enum DropProgressCopier {
     var lastReport = Date(timeIntervalSince1970: 0)
     let reportInterval: TimeInterval = 0.05
 
-    func report(force: Bool) {
+    // `copiedSoFar` is passed in rather than captured: while `copyFile` /
+    // `copyInto` hold `copied` as `inout`, any closure that *also* captured
+    // `copied` would trip Swift's runtime exclusivity check on the next
+    // progress callback.
+    func report(_ copiedSoFar: Int64, force: Bool) {
       let now = Date()
       if force || now.timeIntervalSince(lastReport) >= reportInterval {
-        progress(copied)
+        progress(copiedSoFar)
         lastReport = now
       }
     }
@@ -89,7 +93,7 @@ enum DropProgressCopier {
         try copyFile(src, dst, &copied, token, report)
       }
 
-      report(force: true)
+      report(copied, force: true)
     } catch {
       try? fm.removeItem(at: dst)
       throw error
@@ -103,7 +107,7 @@ enum DropProgressCopier {
     _ dst: URL,
     _ copied: inout Int64,
     _ token: DropCancellationToken,
-    _ report: (Bool) -> Void
+    _ report: (Int64, Bool) -> Void
   ) throws {
     let fm = FileManager.default
     let values = try? src.resourceValues(forKeys: walkKeySet)
@@ -132,7 +136,7 @@ enum DropProgressCopier {
     _ dst: URL,
     _ copied: inout Int64,
     _ token: DropCancellationToken,
-    _ report: (Bool) -> Void
+    _ report: (Int64, Bool) -> Void
   ) throws {
     let fm = FileManager.default
     guard fm.createFile(atPath: dst.path, contents: nil) else {
@@ -158,7 +162,7 @@ enum DropProgressCopier {
       if chunk.isEmpty { break }
       try output.write(contentsOf: chunk)
       copied += Int64(chunk.count)
-      report(false)
+      report(copied, false)
     }
   }
 }
