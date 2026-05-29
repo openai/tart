@@ -840,7 +840,7 @@ struct VMScene: Scene {
             UserDefaults.standard.synchronize()
           }
         ))
-          .keyboardShortcut("t", modifiers: [.command, .control])
+        .keyboardShortcut("t", modifiers: [.command, .control])
       }
     }
   }
