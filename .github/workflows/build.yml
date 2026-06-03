@@ -1,37 +1,209 @@
-name: Build
+name: CI
 
 on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - '*'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  build_cached:
-    name: Build tart (cached)
-    runs-on: ghcr.io/cirruslabs/macos-runner:tahoe
-    timeout-minutes: 30
+  markdown_lint:
+    name: Markdown Lint
+    if: github.ref != 'refs/heads/gh-pages'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
-      - name: Build
-        run: |
-          export COMPILATION_CACHE_ENABLE_CACHING=YES
-          export COMPILATION_CACHE_REMOTE_SERVICE_PATH="$HOME/.cirruslabs/omni-cache.sock"
-          export COMPILATION_CACHE_ENABLE_PLUGIN=YES
-          export COMPILATION_CACHE_ENABLE_INTEGRATED_QUERIES=YES
-          export COMPILATION_CACHE_ENABLE_DETACHED_KEY_QUERIES=YES
-          export SWIFT_ENABLE_COMPILE_CACHE=YES
-          export SWIFT_ENABLE_EXPLICIT_MODULES=YES
-          export SWIFT_USE_INTEGRATED_DRIVER=YES
-          export CLANG_ENABLE_COMPILE_CACHE=YES
-          export CLANG_ENABLE_MODULES=YES
-          swift build --build-system swiftbuild --product tart
+      - uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+      - name: Install markdownlint
+        run: npm install -g markdownlint-cli
+      - name: Lint Markdown
+        run: markdownlint --config=docs/.markdownlint.yml docs/
 
-  build_no_cache:
-    name: Build tart (no cache)
-    runs-on: ghcr.io/cirruslabs/macos-runner:tahoe
+  lint:
+    name: Lint
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: SwiftFormat
+        run: swift package plugin --allow-writing-to-package-directory swiftformat --cache ignore --lint --report swiftformat.json .
+      - name: Upload SwiftFormat report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swiftformat-report
+          path: swiftformat.json
+          if-no-files-found: ignore
+
+  test:
+    name: Test
+    runs-on: macos-15
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - name: Build
-        run: swift build --build-system swiftbuild --product tart
+        run: swift build
+      - name: Test
+        run: |
+          export PATH="$PATH:/usr/sbin"
+          swift test
+
+  build:
+    name: Build (${{ matrix.arch }})
+    if: github.ref_type != 'tag'
+    runs-on: macos-15
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - arm64
+          - x86_64
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build
+        run: swift build --arch "${{ matrix.arch }}" --product tart
+      - name: Sign
+        run: codesign --sign - --entitlements Resources/tart-dev.entitlements --force ".build/${{ matrix.arch }}-apple-macosx/debug/tart"
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: tart-${{ matrix.arch }}
+          path: .build/${{ matrix.arch }}-apple-macosx/debug/tart
+          if-no-files-found: error
+
+  release_dry_run:
+    name: Release (Dry Run)
+    if: github.event_name != 'pull_request' && github.ref_type != 'tag'
+    needs:
+      - lint
+      - build
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      AC_PASSWORD: ${{ secrets.AC_PASSWORD }}
+      GITHUB_TOKEN: ${{ github.token }}
+      GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Configure signing
+        run: |
+          cd "$HOME"
+          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p password101 build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p password101 build.keychain
+          security import certificate.p12 -k build.keychain -P password101 -T /usr/bin/codesign -T /usr/bin/pkgbuild
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k password101 build.keychain
+          xcrun notarytool store-credentials "notarytool" --apple-id "hello@cirruslabs.org" --team-id "9M2P8L4D89" --password "$AC_PASSWORD"
+      - name: Install tools
+        run: |
+          brew install go
+          brew install mitchellh/gon/gon
+          brew install --cask goreleaser/tap/goreleaser-pro
+      - name: Print tool versions
+        run: |
+          security find-identity -v
+          xcodebuild -version
+          swift -version
+      - name: Run GoReleaser
+        run: goreleaser release --skip=publish --snapshot --clean
+      - name: Upload dist
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-dry-run
+          path: dist/*
+          if-no-files-found: ignore
+
+  release:
+    name: Release
+    if: github.ref_type == 'tag'
+    needs:
+      - lint
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      AC_PASSWORD: ${{ secrets.AC_PASSWORD }}
+      GITHUB_TOKEN: ${{ github.token }}
+      GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      SENTRY_ORG: cirrus-labs
+      SENTRY_PROJECT: persistent-workers
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Configure signing
+        run: |
+          cd "$HOME"
+          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p password101 build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p password101 build.keychain
+          security import certificate.p12 -k build.keychain -P password101 -T /usr/bin/codesign -T /usr/bin/pkgbuild
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k password101 build.keychain
+          xcrun notarytool store-credentials "notarytool" --apple-id "hello@cirruslabs.org" --team-id "9M2P8L4D89" --password "$AC_PASSWORD"
+      - name: Install tools
+        run: |
+          brew install go getsentry/tools/sentry-cli
+          brew install mitchellh/gon/gon
+          brew install --cask goreleaser/tap/goreleaser-pro
+      - name: Print tool versions
+        run: |
+          security find-identity -v
+          xcodebuild -version
+          swift -version
+      - name: Run GoReleaser
+        run: goreleaser
+      - name: Upload Sentry debug files
+        run: |
+          cd .build/arm64-apple-macosx/release/
+          dsymutil tart
+          sentry-cli debug-files upload tart.dSYM/
+          SENTRY_PROJECT=tart sentry-cli debug-files upload tart.dSYM/
+          sentry-cli debug-files bundle-sources tart.dSYM
+          sentry-cli debug-files upload tart.src.zip
+          SENTRY_PROJECT=tart sentry-cli debug-files upload tart.src.zip
+      - name: Create Sentry release
+        run: |
+          SENTRY_RELEASE="tart@${GITHUB_REF_NAME}"
+          sentry-cli releases new "$SENTRY_RELEASE"
+          sentry-cli releases set-commits "$SENTRY_RELEASE" --auto
+          sentry-cli releases finalize "$SENTRY_RELEASE"
+
+  deploy_docs:
+    name: Deploy Documentation
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    container:
+      image: ghcr.io/squidfunk/mkdocs-material:latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Deploy documentation
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          mkdocs --verbose gh-deploy --force --remote-branch gh-pages
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
