@@ -142,9 +142,6 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
       GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
       MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-      SENTRY_ORG: cirrus-labs
-      SENTRY_PROJECT: persistent-workers
     steps:
       - uses: actions/checkout@v5
         with:
@@ -161,7 +158,7 @@ jobs:
           xcrun notarytool store-credentials "notarytool" --apple-id "hello@cirruslabs.org" --team-id "9M2P8L4D89" --password "$AC_PASSWORD"
       - name: Install tools
         run: |
-          brew install go getsentry/tools/sentry-cli
+          brew install go
           brew install mitchellh/gon/gon
           brew install --cask goreleaser/tap/goreleaser-pro
       - name: Print tool versions
@@ -171,21 +168,6 @@ jobs:
           swift -version
       - name: Run GoReleaser
         run: goreleaser
-      - name: Upload Sentry debug files
-        run: |
-          cd .build/arm64-apple-macosx/release/
-          dsymutil tart
-          sentry-cli debug-files upload tart.dSYM/
-          SENTRY_PROJECT=tart sentry-cli debug-files upload tart.dSYM/
-          sentry-cli debug-files bundle-sources tart.dSYM
-          sentry-cli debug-files upload tart.src.zip
-          SENTRY_PROJECT=tart sentry-cli debug-files upload tart.src.zip
-      - name: Create Sentry release
-        run: |
-          SENTRY_RELEASE="tart@${GITHUB_REF_NAME}"
-          sentry-cli releases new "$SENTRY_RELEASE"
-          sentry-cli releases set-commits "$SENTRY_RELEASE" --auto
-          sentry-cli releases finalize "$SENTRY_RELEASE"
 
   deploy_docs:
     name: Deploy Documentation
