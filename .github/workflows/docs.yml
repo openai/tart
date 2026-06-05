@@ -1,0 +1,40 @@
+name: Documentation
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - docs/**
+      - mkdocs.yml
+      - .github/workflows/docs.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: documentation
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy Documentation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Deploy
+        run: |
+          docker run --rm \
+            --volume "$PWD:/docs" \
+            --entrypoint sh \
+            ghcr.io/squidfunk/mkdocs-material:latest \
+            -c '
+              git config --global --add safe.directory /docs
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              mkdocs gh-deploy --force --remote-branch gh-pages
+            '

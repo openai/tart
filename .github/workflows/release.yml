@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: ${{ github.ref_type == 'tag' && 'Release' || 'Release (Dry Run)' }}
+    runs-on: ghcr.io/cirruslabs/macos-runner:tahoe
+    timeout-minutes: 90
+    env:
+      AC_PASSWORD: ${{ secrets.AC_PASSWORD }}
+      GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+      GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'snapshot' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Import signing certificate
+        env:
+          KEYCHAIN_PASSWORD: temporary-password
+        run: |
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/build.keychain"
+          security default-keychain -s "$RUNNER_TEMP/build.keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/build.keychain"
+          security import "$RUNNER_TEMP/certificate.p12" \
+            -k "$RUNNER_TEMP/build.keychain" \
+            -P "$KEYCHAIN_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/pkgbuild
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$RUNNER_TEMP/build.keychain"
+          xcrun notarytool store-credentials notarytool \
+            --apple-id hello@cirruslabs.org \
+            --team-id 9M2P8L4D89 \
+            --password "$AC_PASSWORD"
+      - name: Install gon
+        run: brew install mitchellh/gon/gon
+      - name: Release
+        if: github.ref_type == 'tag'
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser-pro
+          version: "~> v2"
+          args: release --clean
+      - name: Release dry run
+        if: github.ref_type != 'tag'
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser-pro
+          version: "~> v2"
+          args: release --skip=publish --snapshot --clean
+      - name: Upload dry-run artifacts
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v6
+        with:
+          name: tart-snapshot
+          path: dist/*
