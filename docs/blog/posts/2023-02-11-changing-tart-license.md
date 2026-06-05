@@ -11,6 +11,12 @@ categories:
 
 # Changing Tart License
 
+!!! note "Current license"
+    This post describes a historical license change announced on February 11, 2023.
+    As of June 5, 2026, Tart is maintained by OpenAI and licensed under
+    [FSL-1.1-ALv2](https://github.com/openai/tart/blob/main/LICENSE).
+    The usage limits, paid tiers, pricing, support commitments, and contact details described below no longer apply.
+
 **TLDR:** We are transitioning Tart's licensing from AGPL-3.0 to [Fair Source 100](https://fair.io/). This change will
 permit unlimited installations on personal computers, but organizations that exceed a certain number of server
 installations utilizing 100 CPU cores will be required to obtain a paid license.
@@ -20,7 +26,7 @@ installations utilizing 100 CPU cores will be required to obtain a paid license.
 Exactly a year ago on February 11th 2022 we started working on Tart – a tiny CLI to run macOS virtual machines on Apple Silicon.
 Three months later we successfully started using Tart in our own production system and decided to share Tart with everyone.
 
-<img src="https://github.com/cirruslabs/tart/raw/main/Resources/TartSocial.png"/>
+<img src="https://github.com/openai/tart/raw/main/Resources/TartSocial.png"/>
 
 The goal was to establish a community of users and contributors to transform Tart from a small CLI to a robust tool
 for various scenarios. **Unfortunately, we were not successful in attracting a significant number of contributors.**
@@ -60,13 +66,9 @@ device without a physical display connected. For example, a Mac Mini with a HDMI
 but a Mac Mini on a desk with a connected physical display is considered a personal computer. **Usage on personal computers
 and before reaching the 100 CPU cores limit is royalty-free and does not have the viral properties of AGPL.**
 
-!!! note "Pricing update"
-    This post announced Tart licensing in February 2023 and originally listed monthly prices.
-    Pricing has since changed to yearly billing. See [Licensing and Support](../../licensing.md#license-tiers) for the latest terms.
-
-When an organization surpasses the 100 CPU cores limit, they will be required to obtain a [Gold Tier License](../../licensing.md#license-tiers),
-which costs \$12,000 per year. Upon reaching a limit of 500 CPU cores, a [Platinum Tier License](../../licensing.md#license-tiers)
-(\$36,000 per year) will be required, and for organizations that exceed 3000 CPU cores, a custom [Diamond Tier License](../../licensing.md#license-tiers)
+When an organization surpasses the 100 CPU cores limit, they will be required to obtain a Gold Tier License,
+which costs \$12,000 per year. Upon reaching a limit of 500 CPU cores, a Platinum Tier License
+(\$36,000 per year) will be required, and for organizations that exceed 3000 CPU cores, a custom Diamond Tier License
 (\$12 per core per year) will be necessary. **All paid license tiers will include priority feature development and SLAs on support with urgent issues.**
 
 ## Have we considered alternatives?
@@ -78,6 +80,5 @@ this approach is not addressing concerns related to the viral nature of AGPL for
 we concluded that transitioning to a source-available model with a mandatory paid licensing is fair, as the licensing fees
 are relatively insignificant for companies that reach a significant level of usage.
 
-If you have any questions or concerns, please feel free to reach out to [licensing@cirruslabs.org](mailto:licensing@cirruslabs.org).
 If the new licensing model is not suitable for your organization, you are welcome to continue using the AGPL version of Tart,
 but please ensure it is not used in a non-AGPL environment.

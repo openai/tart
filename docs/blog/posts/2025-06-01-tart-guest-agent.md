@@ -11,9 +11,9 @@ categories:
 
 # Bridging the gaps with the Tart Guest Agent
 
-We're introducing a new improvement for the Tart usability experience: a [Tart Guest Agent](https://github.com/cirruslabs/tart-guest-agent).
+We're introducing a new improvement for the Tart usability experience: a [Tart Guest Agent](https://github.com/openai/tart-guest-agent).
 
-This agent provides automatic disk resizing, seamless clipboard sharing for macOS guests (a [long-awaited](https://github.com/cirruslabs/tart/issues/14) feature), and the ability to run commands, without SSH and networking, using the new `tart exec` command.
+This agent provides automatic disk resizing, seamless clipboard sharing for macOS guests (a [long-awaited](https://github.com/openai/tart/issues/14) feature), and the ability to run commands, without SSH and networking, using the new `tart exec` command.
 
 As of recently, we include this agent in all non-vanilla Cirrus Labs images, so you likely won't need to do anything to benefit from these usability improvements.
 
@@ -47,7 +47,7 @@ Using gRPC simplifies `tart exec` implementation because of code generation and 
 
 Thanks to [gRPC Swift](https://github.com/grpc/grpc-swift), which is built on top of [SwiftNIO](https://github.com/apple/swift-nio), we get [`async/await`](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/concurrency/) support for free, further simplifying the `tart exec` logic.
 
-As for the Tart Guest Agent, the final result is a Golang binary that [can be customized](https://github.com/cirruslabs/tart-guest-agent?tab=readme-ov-file#guest-agent-for-tart-vms) depending on the execution context:
+As for the Tart Guest Agent, the final result is a Golang binary that [can be customized](https://github.com/openai/tart-guest-agent?tab=readme-ov-file#guest-agent-for-tart-vms) depending on the execution context:
 
 * launchd global daemon — runs as a privileged user (`root`), has no clipboard access
     * `--resize-disk` — resizes the disk when there's a free space at the end of a disk (assuming that one previously ran `tart set --disk-size`)
@@ -59,14 +59,10 @@ We’ve also introduced `--run-daemon` (which implies `--resize-disk`) and `--ru
 
 ## Future plans
 
-First, we'd like to thank our paid clients, without whom this feature wouldn't have been possible.
-
-[Become one now](../../licensing.md) and enjoy higher allowances for Tart VMs and Orchard workers—while helping ensure that our roadmap aligns with your company's needs.
-
 In the near future we plan to implement:
 
 * Linux support — to provide seamless experience for Linux guests too
 * a new `tart ip` resolver — to provide a more robust IP retrieval facility for Linux guests, which often struggle to populate the host's ARP table with their network activity
 * `tart cp` command — to copy files from/to guest VMs
 
-Stay tuned, and feel free to send us feedback on [GitHub](https://github.com/cirruslabs/tart) and [Twitter](https://x.com/cirrus_labs)!
+Stay tuned, and feel free to send us feedback on [GitHub](https://github.com/openai/tart) and [Twitter](https://x.com/cirrus_labs)!

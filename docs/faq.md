@@ -59,7 +59,7 @@ Remote images are pulled into `~/.tart/cache/OCIs/`.
 ## Nested virtualization support?
 
 Tart is limited by functionality of Apple's `Virtualization.Framework`. At the moment `Virtualization.Framework`
-supports nested virtualization only on M3 or M4 chips running macOS 15 (Sequoia) or later and [only for Linux VMs](https://github.com/cirruslabs/tart/issues/1231#issuecomment-4410915463). By default, it is disabled, but can be enabled by passing the `--nested` flag to `tart run`.
+supports nested virtualization only on M3 or M4 chips running macOS 15 (Sequoia) or later and [only for Linux VMs](https://github.com/openai/tart/issues/1231#issuecomment-4410915463). By default, it is disabled, but can be enabled by passing the `--nested` flag to `tart run`.
 
 ## Connecting to a service running on host
 
@@ -74,7 +74,7 @@ netstat -nr | awk '/default/{print $2; exit}'
 ```
 
 Note: that accessing host is only possible with the default NAT network. If you are running your virtual machines with
-[Softnet](https://github.com/cirruslabs/softnet) (via `tart run --net-softnet <VM NAME>)`, then the network isolation
+[Softnet](https://github.com/openai/softnet) (via `tart run --net-softnet <VM NAME>)`, then the network isolation
 is stricter and it's not possible to access the host.
 
 ## Avoiding the "Local Network" permission pop-up
@@ -112,7 +112,7 @@ sudo defaults write /Library/Preferences/SystemConfiguration/com.apple.vmnet.pli
 
 By default, the built-in macOS DHCP server allocates IP-addresses to the VMs for the duration of 86,400 seconds (one day), which may easily cause DHCP exhaustion if you run more than ~253 VMs per day, or in other words, more than one VM every ~6 minutes.
 
-This issue is worked around automatically [when using Softnet](http://github.com/cirruslabs/softnet), however, if you don't use or can't use it, the following command will reduce the lease time from the default 86,400 seconds (one day) to 600 seconds (10 minutes):
+This issue is worked around automatically [when using Softnet](https://github.com/openai/softnet), however, if you don't use or can't use it, the following command will reduce the lease time from the default 86,400 seconds (one day) to 600 seconds (10 minutes):
 
 ```shell
 sudo defaults write /Library/Preferences/SystemConfiguration/com.apple.InternetSharing.default.plist bootpd -dict DHCPLeaseTimeSecs -int 600
@@ -204,7 +204,7 @@ Alternatively, you can pass the credentials via the environment variables, see [
 ## How is Tart different from Anka?
 
 Under the hood Tart is using the same technology as Anka 3.0 so there should be no real difference in performance
-or features supported. If there is some feature missing please don't hesitate to [create a feature request](https://github.com/cirruslabs/tart/issues).
+or features supported. If there is some feature missing please don't hesitate to [create a feature request](https://github.com/openai/tart/issues).
 
 Instead of Anka Registry, Tart can work with any OCI-compatible container registry. This provides a much more consistent
 and scalable experience for distributing virtual machines.

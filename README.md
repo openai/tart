@@ -1,4 +1,4 @@
-<img src="https://github.com/cirruslabs/tart/raw/main/Resources/TartSocial.png"/>
+<img src="https://github.com/openai/tart/raw/main/Resources/TartSocial.png"/>
 
 *Tart* is a virtualization toolset to build, run and manage macOS and Linux virtual machines (VMs) on Apple Silicon.
 Built by CI engineers for your automation needs. Here are some highlights of Tart:
@@ -13,7 +13,7 @@ service — a drop-in replacement for the standard GitHub-hosted runners, offeri
 
 <p align="center">
   <a href="https://cirrus-runners.app/?utm_source=github&utm_medium=referral" target=_blank>
-    <img src="https://github.com/cirruslabs/tart/raw/main/Resources/CirrusRunnersForGHA.png" height="65"/>
+    <img src="https://github.com/openai/tart/raw/main/Resources/CirrusRunnersForGHA.png" height="65"/>
   </a>
 </p>
 
@@ -21,44 +21,38 @@ Many companies are using Tart in their internal setups. Here are just a few of t
 
 <p align="center">
   <a href="https://atlassian.com/" target=_blank>
-    <img src="https://github.com/cirruslabs/tart/raw/main/Resources/Users/Atlassian.png" height="65"/>
+    <img src="https://github.com/openai/tart/raw/main/Resources/Users/Atlassian.png" height="65"/>
   </a>
   <a href="https://www.figma.com/" target=_blank>
-    <img src="https://github.com/cirruslabs/tart/raw/main/Resources/Users/Figma.png" height="65"/>
+    <img src="https://github.com/openai/tart/raw/main/Resources/Users/Figma.png" height="65"/>
   </a>
   <a href="https://mullvad.net/" target=_blank>
-    <img src="https://github.com/cirruslabs/tart/raw/main/Resources/Users/Mullvad.png" height="65"/>
+    <img src="https://github.com/openai/tart/raw/main/Resources/Users/Mullvad.png" height="65"/>
   </a>
   <a href="https://krisp.ai/" target=_blank>
-    <img src="https://github.com/cirruslabs/tart/raw/main/Resources/Users/Krisp.png" height="65"/>
+    <img src="https://github.com/openai/tart/raw/main/Resources/Users/Krisp.png" height="65"/>
   </a>
   <a href="https://testingbot.com/" target=_blank>
-    <img src="https://github.com/cirruslabs/tart/raw/main/Resources/Users/TestingBot.png" height="65"/>
+    <img src="https://github.com/openai/tart/raw/main/Resources/Users/TestingBot.png" height="65"/>
   </a>
   <a href="https://symflower.com/" target=_blank>
-    <img src="https://github.com/cirruslabs/tart/raw/main/Resources/Users/Symflower.png" height="65"/>
+    <img src="https://github.com/openai/tart/raw/main/Resources/Users/Symflower.png" height="65"/>
   </a>
   <a href="https://transloadit.com/" target=_blank>
-    <img src="https://github.com/cirruslabs/tart/raw/main/Resources/Users/Transloadit.png" height="65"/>
+    <img src="https://github.com/openai/tart/raw/main/Resources/Users/Transloadit.png" height="65"/>
   </a>
   <a href="https://cirrus-ci.org/" target=_blank>
-    <img src="https://github.com/cirruslabs/tart/raw/main/Resources/Users/CirrusCI.png" height="65"/>
+    <img src="https://github.com/openai/tart/raw/main/Resources/Users/CirrusCI.png" height="65"/>
   </a>
   <a href="https://www.pitsdatarecovery.net/" target=_blank>
-    <img src="https://github.com/cirruslabs/tart/raw/main/Resources/Users/PITSGlobalDataRecoveryServices.png" height="65"/>
+    <img src="https://github.com/openai/tart/raw/main/Resources/Users/PITSGlobalDataRecoveryServices.png" height="65"/>
   </a>
   <a href="https://expo.dev/" target=_blank>
-    <img src="https://github.com/cirruslabs/tart/raw/main/Resources/Users/Expo.png" height="65"/>
+    <img src="https://github.com/openai/tart/raw/main/Resources/Users/Expo.png" height="65"/>
   </a>
 </p>
 
-**Note:** If your company or project is using Tart please consider [sharing with the community](https://github.com/cirruslabs/tart/discussions/857).
-
-<p align="center">
-  <a href="https://aws.amazon.com/marketplace/pp/prodview-qczco34wlkdws?utm_source=github&utm_medium=referral" target=_blank>
-    <img src="https://github.com/cirruslabs/tart/raw/main/Resources/AWSMarkeplaceLogo.png" height="90"/>
-  </a>
-</p>
+**Note:** If your company or project is using Tart please consider [sharing with the community](https://github.com/openai/tart/discussions/857).
 
 ## Usage
 
@@ -70,5 +64,5 @@ tart clone ghcr.io/cirruslabs/macos-tahoe-base:latest tahoe-base
 tart run tahoe-base
 ```
 
-Please check the [official documentation](https://tart.run) for more information and/or feel free to use [discussions](https://github.com/cirruslabs/tart/discussions)
+Please check the [official documentation](https://tart.run) for more information and/or feel free to use [discussions](https://github.com/openai/tart/discussions)
 for remaining questions.

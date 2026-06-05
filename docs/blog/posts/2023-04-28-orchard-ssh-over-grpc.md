@@ -11,7 +11,7 @@ categories:
 
 # SSH over gRPC or how Orchard simplifies accessing VMs in private networks
 
-We started developing [Orchard](https://github.com/cirruslabs/orchard), an orchestrator for [Tart](https://tart.run/), with the requirement that it should allow users to access virtual machines running on worker nodes in private networks that users might not have access to.
+We started developing [Orchard](https://github.com/openai/orchard), an orchestrator for [Tart](https://tart.run/), with the requirement that it should allow users to access virtual machines running on worker nodes in private networks that users might not have access to.
 
 At the same time, we wanted to enable users to access VMs on these remote workers just as easily as they’d access network services on their local Tart VMs.
 
@@ -102,14 +102,14 @@ Overall, the technology described in this article somewhat resembles what [we pr
 
 We really hope this feature will be useful for many, just as the Cirrus Terminal, and that it will remove the pain of scaling Tart beyond a single machine.
 
-You can give [Orchard](https://github.com/cirruslabs/orchard) a try by running it locally in development mode on any Apple Silicon device:
+You can give [Orchard](https://github.com/openai/orchard) a try by running it locally in development mode on any Apple Silicon device:
 
 ```bash
 brew install cirruslabs/cli/orchard
 orchard dev
 ```
 
-This will launch a development cluster with a single worker on your machine. Refer to [Orchard documentation](https://github.com/cirruslabs/orchard#creating-virtual-machines)
+This will launch a development cluster with a single worker on your machine. Refer to [Orchard documentation](https://github.com/openai/orchard#creating-virtual-machines)
 on how to create your first virtual machine and access it.
 
-Stay tuned and don’t hesitate to send us your feedback either [on GitHub](https://github.com/cirruslabs/orchard) or [Twitter](https://twitter.com/cirrus_labs)!
+Stay tuned and don’t hesitate to send us your feedback either [on GitHub](https://github.com/openai/orchard) or [Twitter](https://twitter.com/cirrus_labs)!

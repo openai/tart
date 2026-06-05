@@ -1,10 +1,10 @@
-repo_url: https://github.com/cirruslabs/tart/
+repo_url: https://github.com/openai/tart/
 site_url: https://tart.run/
 edit_uri: blob/main/docs/
 
 site_name: Tart Virtualization
-site_author: Cirrus Labs
-copyright: © Cirrus Labs 2017-present
+site_author: OpenAI
+copyright: © OpenAI 2022-present
 site_description: >
   Tart is a virtualization toolset to build, run and manage macOS and Linux virtual machines (VMs) on Apple Silicon.
 
@@ -100,7 +100,6 @@ nav:
       - "GitLab Runner": integrations/gitlab-runner.md
       - "Buildkite": integrations/buildkite.md
       - "Packer": integrations/packer.md
-  - "Support & Licensing": licensing.md
   - "Orchestration":
       - "Quick Start": orchard/quick-start.md
       - "Architecture and Security": orchard/architecture-and-security.md
@@ -111,8 +110,8 @@ nav:
       - "Integrating with the API": orchard/integration-guide.md
   - "FAQ": faq.md
   - "Legal":
-      - 'Terms of Service': legal/terms.md
-      - 'Privacy': legal/privacy.md
+      - 'Terms of Use': https://openai.com/policies/terms-of-use/
+      - 'Privacy Policy': https://openai.com/policies/privacy-policy/
   - Blog:
       - blog/index.md
 
@@ -128,5 +127,5 @@ extra:
       find what they're searching for. With your consent, you're helping us to
       make our documentation better.
   social:
-    - icon: fontawesome/brands/twitter
-      link: 'https://twitter.com/cirrus_labs'
+    - icon: fontawesome/brands/x-twitter
+      link: 'https://x.com/OpenAI'

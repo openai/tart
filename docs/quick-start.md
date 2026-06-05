@@ -17,7 +17,7 @@ tart run tahoe-base
     It's also possible to manually install `tart` binary from the latest released archive:
 
     ```bash
-    curl -LO https://github.com/cirruslabs/tart/releases/latest/download/tart.tar.gz
+    curl -LO https://github.com/openai/tart/releases/latest/download/tart.tar.gz
     tar -xzvf tart.tar.gz
     ./tart.app/Contents/MacOS/tart clone ghcr.io/cirruslabs/macos-tahoe-base:latest tahoe-base
     ./tart.app/Contents/MacOS/tart run tahoe-base
@@ -27,7 +27,7 @@ tart run tahoe-base
     to pick `tart.app/Contents/embedded.provisionprofile` for elevated privileges that Tart needs.
 
 <p align="center">
-  <img src="https://github.com/cirruslabs/tart/raw/main/Resources/TartScreenshot.png"/>
+  <img src="https://github.com/openai/tart/raw/main/Resources/TartScreenshot.png"/>
 </p>
 
 ## VM images
@@ -74,7 +74,7 @@ tart set ubuntu --disk-size 50
 tart run ubuntu
 ```
 
-These Linux images can be ran natively on [Vetu](https://github.com/cirruslabs/vetu), our virtualization solution for Linux, assuming that Vetu itself is running on an `arm64` machine.
+These Linux images can be run natively on [Vetu](https://github.com/openai/vetu), a virtualization solution for Linux, assuming that Vetu itself is running on an `arm64` machine.
 
 Similarly to macOS, there's also a [full list of images](https://github.com/orgs/cirruslabs/packages?repo_name=linux-image-templates) in which you can discovery specific tags (e.g. `ghcr.io/cirruslabs/ubuntu:22.04`) and [Linux-specific Packer templates](https://github.com/cirruslabs/linux-image-templates) that were used to generate these images.
 

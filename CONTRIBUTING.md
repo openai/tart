@@ -20,7 +20,7 @@ Table of Contents
 ```
 ## How to Create an Issue/Enhancement
 
-1. Go to the [Issue page](https://github.com/cirruslabs/tart/issues) of the repository
+1. Go to the [Issue page](https://github.com/openai/tart/issues) of the repository
 2. Click on the "New Issue" button
 3. Provide a descriptive title and detailed description of the issue or enhancement you're suggesting
 4. Submit the issue
