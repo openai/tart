@@ -758,11 +758,23 @@ struct Run: AsyncParsableCommand {
   }
 }
 
-struct MainApp: App {
-  static var suspendable: Bool = false
-  static var capturesSystemKeys: Bool = false
+// Live title-bar toggle for the running VM window(s). Launch state is set via
+// `.windowStyle` instead — AppKit at launch races SwiftUI's window creation.
+func applyTitleBarStyle(hidden: Bool) {
+  for window in NSApplication.shared.windows {
+    window.titleVisibility = hidden ? .hidden : .visible
+    window.titlebarAppearsTransparent = hidden
+    if hidden {
+      window.styleMask.insert(.fullSizeContentView)
+    } else {
+      window.styleMask.remove(.fullSizeContentView)
+    }
+  }
+}
 
-  @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
+struct VMScene: Scene {
+  // Local preference (UserDefaults), not VMConfig — so it never travels with the image.
+  @AppStorage("hideTitleBar") private var hideTitleBar = false
 
   var body: some Scene {
     WindowGroup(vm!.name) {
@@ -786,6 +798,12 @@ struct MainApp: App {
         idealHeight: CGFloat(vm!.config.display.height),
         maxHeight: .infinity
       )
+      // Vary the parameter, not an if/else: a structural conditional rebuilds VMView,
+      // firing its .onDisappear (which SIGINTs the process).
+      .ignoresSafeArea(edges: hideTitleBar ? .all : [])
+      .onChange(of: hideTitleBar) { newValue in
+        applyTitleBarStyle(hidden: newValue)
+      }
     }.commands {
       // Remove some standard menu options
       CommandGroup(replacing: .help, addition: {})
@@ -813,7 +831,49 @@ struct MainApp: App {
             }
           }
         }
+        Divider()
+        Toggle("Hide Title Bar", isOn: Binding(
+          get: { hideTitleBar },
+          set: { newValue in
+            hideTitleBar = newValue
+            // Force a flush: tart exits via SIGINT/exit(0), pre-empting the lazy write.
+            UserDefaults.standard.synchronize()
+          }
+        ))
+        .keyboardShortcut("t", modifiers: [.command, .control])
       }
+    }
+  }
+}
+
+struct HideTitleBarApp: App {
+  @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
+
+  var body: some Scene {
+    VMScene()
+      .windowStyle(.hiddenTitleBar)
+  }
+}
+
+struct ShowTitleBarApp: App {
+  @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
+
+  var body: some Scene {
+    VMScene()
+  }
+}
+
+// Picks the window style at launch from the remembered preference — declaratively, to
+// avoid racing SwiftUI's window creation during boot.
+enum MainApp {
+  static var suspendable: Bool = false
+  static var capturesSystemKeys: Bool = false
+
+  static func main() {
+    if UserDefaults.standard.bool(forKey: "hideTitleBar") {
+      HideTitleBarApp.main()
+    } else {
+      ShowTitleBarApp.main()
     }
   }
 }
