@@ -81,9 +81,13 @@ enum DropProgressCopier {
         try fm.createDirectory(at: dst, withIntermediateDirectories: true)
         // Deterministic depth-first walk so the destination tree mirrors the
         // source and directories are created before their contents.
-        let children = (try? fm.contentsOfDirectory(
+        // Surface (don't swallow) read failures: a permission/I/O error here
+        // means an incomplete copy, so let it propagate to the do/catch below,
+        // which removes the partial `dst` and rethrows rather than reporting a
+        // silent success.
+        let children = try fm.contentsOfDirectory(
           at: src, includingPropertiesForKeys: walkKeys, options: []
-        )) ?? []
+        )
         for child in children.sorted(by: { $0.path < $1.path }) {
           if token.isCancelled { throw DropCopyCancelled() }
           let childDst = dst.appendingPathComponent(child.lastPathComponent)
@@ -113,9 +117,12 @@ enum DropProgressCopier {
     let values = try? src.resourceValues(forKeys: walkKeySet)
     if values?.isDirectory == true {
       try fm.createDirectory(at: dst, withIntermediateDirectories: true)
-      let children = (try? fm.contentsOfDirectory(
+      // Propagate read failures so an unreadable nested directory aborts the
+      // drop (cleaned up by copyTree's catch) instead of silently producing a
+      // partial tree in the guest.
+      let children = try fm.contentsOfDirectory(
         at: src, includingPropertiesForKeys: walkKeys, options: []
-      )) ?? []
+      )
       for child in children.sorted(by: { $0.path < $1.path }) {
         if token.isCancelled { throw DropCopyCancelled() }
         try copyInto(child, dst.appendingPathComponent(child.lastPathComponent), &copied, token, report)

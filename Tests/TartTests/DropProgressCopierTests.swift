@@ -119,4 +119,38 @@ final class DropProgressCopierTests: XCTestCase {
     let src = try write("sized.bin", 4242)
     XCTAssertEqual(DropProgressCopier.totalSize(of: src), 4242)
   }
+
+  func testUnreadableNestedDirectoryThrowsAndRemovesPartial() throws {
+    // A nested directory whose contents can't be listed (permission denied)
+    // must abort the copy and clean up — not silently produce a partial tree
+    // in the guest and report success.
+    try XCTSkipIf(getuid() == 0, "root bypasses POSIX permissions; can't exercise the denied-read path")
+
+    let srcDir = tmp.appendingPathComponent("locked-bundle", isDirectory: true)
+    let sealed = srcDir.appendingPathComponent("sealed", isDirectory: true)
+    try FileManager.default.createDirectory(at: sealed, withIntermediateDirectories: true)
+    try Data(repeating: 0x41, count: 10).write(to: srcDir.appendingPathComponent("a.txt"))
+    try Data(repeating: 0x41, count: 20).write(to: sealed.appendingPathComponent("secret.txt"))
+
+    // Drop read/exec on the nested dir so contentsOfDirectory(at:) fails.
+    // Restore perms before the suite's tmp teardown so cleanup can recurse in
+    // (teardown blocks run LIFO, so this runs before the setUp cleanup).
+    try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: sealed.path)
+    addTeardownBlock {
+      try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: sealed.path)
+    }
+
+    let dst = tmp.appendingPathComponent("locked-copy", isDirectory: true)
+    XCTAssertThrowsError(
+      try DropProgressCopier.copyTree(
+        from: srcDir, to: dst, totalBytes: 30, token: DropCancellationToken()
+      ) { _ in }
+    ) { error in
+      XCTAssertFalse(error is DropCopyCancelled, "should surface the read error, not a cancellation")
+    }
+    XCTAssertFalse(
+      FileManager.default.fileExists(atPath: dst.path),
+      "an unreadable nested directory must not leave a partial tree in the drop zone"
+    )
+  }
 }
