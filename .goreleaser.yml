@@ -62,8 +62,8 @@ brews:
         sudo defaults write /Library/Preferences/SystemConfiguration/com.apple.InternetSharing.default.plist bootpd -dict DHCPLeaseTimeSecs -int 600
 
       See https://tart.run/faq/#changing-the-default-dhcp-lease-time for more details.
-    homepage: https://github.com/cirruslabs/tart
-    license: "Fair Source"
+    homepage: https://github.com/openai/tart
+    license: FSL-1.1-Apache-2.0
     description: Run macOS and Linux VMs on Apple Hardware
     skip_upload: auto
     dependencies:

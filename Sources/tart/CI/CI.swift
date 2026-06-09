@@ -1,5 +1,5 @@
 struct CI {
-  private static let rawVersion = "${CIRRUS_TAG}"
+  private static let rawVersion = "${VERSION}"
 
   static var version: String {
     rawVersion.expanded() ? rawVersion : "SNAPSHOT"

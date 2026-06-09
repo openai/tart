@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  merge_group:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ghcr.io/cirruslabs/macos-runner:tahoe
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build
+        run: swift build
+      - name: Run unit tests
+        run: |
+          export PATH="$PATH:/usr/sbin"
+          swift test
+      - name: Run integration tests
+        run: |
+          codesign --sign - --entitlements Resources/tart-dev.entitlements --force .build/debug/tart
+          export PATH="$PWD/.build/arm64-apple-macosx/debug:$PATH"
+          cd integration-tests
+          python3 -m venv --symlinks venv
+          source venv/bin/activate
+          pip install -r requirements.txt
+          pytest --verbose --junit-xml=pytest-junit.xml
+          go test -v ./...
+      - name: Upload integration test results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pytest-junit
+          path: integration-tests/pytest-junit.xml
+          if-no-files-found: ignore
+
+  lint:
+    name: Lint
+    runs-on: ghcr.io/cirruslabs/macos-runner:tahoe
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run SwiftFormat
+        run: swift package plugin --allow-writing-to-package-directory swiftformat --cache ignore --lint --report swiftformat.json .
+      - name: Upload SwiftFormat report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: swiftformat
+          path: swiftformat.json
+          if-no-files-found: ignore
+
+  markdown-lint:
+    name: Markdown Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install markdownlint
+        run: npm install --global markdownlint-cli
+      - name: Lint documentation
+        run: markdownlint --config docs/.markdownlint.yml docs/
+
+  build:
+    name: Build (${{ matrix.arch }})
+    runs-on: ghcr.io/cirruslabs/macos-runner:tahoe
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - arm64
+          - x86_64
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build
+        run: swift build --arch "${{ matrix.arch }}" --product tart
+      - name: Sign
+        run: codesign --sign - --entitlements Resources/tart-dev.entitlements --force ".build/${{ matrix.arch }}-apple-macosx/debug/tart"
+      - name: Upload binary
+        uses: actions/upload-artifact@v6
+        with:
+          name: tart-${{ matrix.arch }}
+          path: .build/${{ matrix.arch }}-apple-macosx/debug/tart

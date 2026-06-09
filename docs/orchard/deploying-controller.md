@@ -2,7 +2,7 @@
 
 Compared to Worker, which can only be deployed on a macOS machine, Controller can be also deployed on Linux.
 
-In fact, we've made a [container image](https://github.com/orgs/cirruslabs/packages/container/package/orchard) to ease deploying the Controller in container-native environments such as Kubernetes.
+In fact, we've made a [container image](https://github.com/openai/orchard/pkgs/container/orchard) to ease deploying the Controller in container-native environments such as Kubernetes.
 
 Another thing to keep in mind that Orchard API is secured by default: all requests must be authenticated with the credentials of a service account. When you first run Orchard Controller, a `bootstrap-admin` service account will be created automatically and credentials will be printed to the standard output.
 
@@ -88,7 +88,7 @@ gcloud compute instances create-with-container orchard-controller \
   --image-project cos-cloud \
   --tags=https-server \
   --address=$ORCHARD_IP \
-  --container-image=ghcr.io/cirruslabs/orchard:latest \
+  --container-image=ghcr.io/openai/orchard:latest \
   --container-env=PORT=443 \
   --container-env=ORCHARD_BOOTSTRAP_ADMIN_TOKEN=$ORCHARD_BOOTSTRAP_ADMIN_TOKEN \
   --container-mount-host-path=host-path=/home/orchard-data,mode=rw,mount-path=/data
@@ -149,7 +149,7 @@ spec:
     spec:
       containers:
         - name: orchard-controller
-          image: ghcr.io/cirruslabs/orchard:latest
+          image: ghcr.io/openai/orchard:latest
           volumeMounts:
             - mountPath: /data
               name: orchard-controller
@@ -180,63 +180,3 @@ You can further allocate a static IP address and use it by adding annotations to
 
 * on Google's GKE: <https://cloud.google.com/kubernetes-engine/docs/concepts/service-load-balancer-parameters#spd-static-ip>
 * on Amazon's EKS: <https://kubernetes.io/docs/reference/labels-annotations-taints/#service-beta-kubernetes-io-aws-load-balancer-eip-allocations>
-
-### systemd service on Debian-based distributions
-
-This should work for most Debian-based distributions like Debian, Ubuntu, etc.
-
-Firstly, make sure that the APT transport for downloading packages via HTTPS and common X.509 certificates are installed:
-
-```shell
-sudo apt-get update && sudo apt-get -y install apt-transport-https ca-certificates
-```
-
-Then, add the Cirrus Labs repository:
-
-```shell
-echo "deb [trusted=yes] https://apt.fury.io/cirruslabs/ /" | sudo tee /etc/apt/sources.list.d/cirruslabs.list
-```
-
-Update the package index files and install the Orchard Controller:
-
-```shell
-sudo apt-get update && sudo apt-get -y install orchard-controller
-```
-
-Finally, enable and start the Orchard Controller systemd service:
-
-```shell
-sudo systemctl enable orchard-controller
-sudo systemctl start orchard-controller
-```
-
-The bootstrap credentials will be printed to the standard output. You can inspect them by running `sudo systemctl status orhcard-controller` or `journalctl -u orchard-controller`.
-
-### systemd service on RPM-based distributions
-
-This should work for most RPM-based distributions like Fedora, CentOS, etc.
-
-First, create a `/etc/yum.repos.d/cirruslabs.repo` file with the following contents:
-
-```ini
-[cirruslabs]
-name=Cirrus Labs Repo
-baseurl=https://yum.fury.io/cirruslabs/
-enabled=1
-gpgcheck=0
-```
-
-Then, install the Orchard Controller:
-
-```shell
-sudo yum -y install orchard-controller
-```
-
-Finally, enable and start the Orchard Controller systemd service:
-
-```shell
-systemctl enable orchard-controller
-systemctl start orchard-controller
-```
-
-The bootstrap credentials will be printed to the standard output. You can inspect them by running `sudo systemctl status orhcard-controller` or `journalctl -u orchard-controller`.
