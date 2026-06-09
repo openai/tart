@@ -514,7 +514,7 @@ struct Run: AsyncParsableCommand {
         }
 
         if #available(macOS 14, *) {
-          Task {
+          ErrorReportingTask("Failed to run control socket") {
             try await ControlSocket(vmDir.controlSocketURL).run()
           }
         }
@@ -586,7 +586,7 @@ struct Run: AsyncParsableCommand {
     signal(SIGUSR2, SIG_IGN)
     let sigusr2Src = DispatchSource.makeSignalSource(signal: SIGUSR2)
     sigusr2Src.setEventHandler {
-      Task {
+      ErrorReportingTask("Failed to request guest OS to stop") {
         print("Requesting guest OS to stop...")
         try vm!.virtualMachine.requestStop()
       }
@@ -798,13 +798,13 @@ struct MainApp: App {
       CommandGroup(replacing: .appInfo) { AboutTart(config: vm!.config) }
       CommandMenu("Control") {
         Button("Start") {
-          Task { try await vm!.virtualMachine.start() }
+          ErrorReportingTask("Failed to start VM") { try await vm!.virtualMachine.start() }
         }
         Button("Stop") {
-          Task { try await vm!.virtualMachine.stop() }
+          ErrorReportingTask("Failed to stop VM") { try await vm!.virtualMachine.stop() }
         }
         Button("Request Stop") {
-          Task { try vm!.virtualMachine.requestStop() }
+          ErrorReportingTask("Failed to request VM stop") { try vm!.virtualMachine.requestStop() }
         }
         if #available(macOS 14, *) {
           if (MainApp.suspendable) {
