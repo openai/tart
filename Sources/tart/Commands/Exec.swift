@@ -1,6 +1,5 @@
 import ArgumentParser
 import Foundation
-import NIOPosix
 import GRPC
 import Cirruslabs_TartGuestAgent_Grpc_Swift
 
@@ -41,27 +40,12 @@ struct Exec: AsyncParsableCommand {
       throw RuntimeError.VMNotRunning(name)
     }
 
-    // Create a gRPC channel connected to the VM's control socket
-    let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
-    defer {
-      try! group.syncShutdownGracefully()
-    }
-
     // Change the current working directory to a VM's base directory
     // to work around Unix domain socket 104 byte limitation [1]
     //
     // [1]: https://blog.8-p.info/en/2020/06/11/unix-domain-socket-length/
     if let baseURL = vmDir.controlSocketURL.baseURL {
       FileManager.default.changeCurrentDirectoryPath(baseURL.path())
-    }
-
-    let channel = try GRPCChannelPool.with(
-      target: .unixDomainSocket(vmDir.controlSocketURL.relativePath),
-      transportSecurity: .plaintext,
-      eventLoopGroup: group,
-    )
-    defer {
-      try! channel.close().wait()
     }
 
     // Switch controlling terminal into raw mode when remote pseudo-terminal is requested
@@ -79,7 +63,10 @@ struct Exec: AsyncParsableCommand {
 
     // Execute a command in a running VM
     do {
-      try await execute(channel)
+      let controlSocketPath = vmDir.controlSocketURL.relativePath
+      try await withGuestAgentChannel(unixDomainSocketPath: controlSocketPath) { channel in
+        try await execute(channel)
+      }
     } catch let error as GRPCConnectionPoolError {
       throw RuntimeError.Generic("Failed to connect to the VM using its control socket: \(error.localizedDescription), is the Tart Guest Agent running?")
     }
