@@ -285,6 +285,28 @@ struct Run: AsyncParsableCommand {
   @Flag(help: ArgumentHelp("Disable the keyboard"))
   var noKeyboard: Bool = false
 
+  #if arch(arm64) && compiler(>=6.4)
+    @Option(help: ArgumentHelp("Provision a macOS guest on first boot using the guest provisioning API", discussion: """
+    Takes a comma-separated list of key=value pairs that configure the initial setup of a macOS guest
+
+    Requires the host to be running macOS 27 (or newer) and only takes effect on the first boot after
+    creation of a macOS 27 (or newer) guest VM.
+
+    Supported keys (matching VZMacGuestProvisioningOptions):
+
+    * fullName=<NAME> — the person's full name to configure
+
+    * username=<USERNAME> — the username for logging into the guest
+
+    * password=<PASSWORD> — the password to configure for the guest
+
+    * logsInAutomatically=true|false — whether to automatically log the person in at startup
+
+    * enablesRemoteLogin=true|false — whether to enable Remote Login (SSH) in the guest
+    """, valueName: "key=value,..."))
+    var provisioningOpts: String?
+  #endif
+
   mutating func validate() throws {
     if vnc && vncExperimental {
       throw ValidationError("--vnc and --vnc-experimental are mutually exclusive")
@@ -352,6 +374,19 @@ struct Run: AsyncParsableCommand {
       }
     }
 
+    #if arch(arm64) && compiler(>=6.4)
+      if provisioningOpts != nil {
+        if #unavailable(macOS 27) {
+          throw ValidationError("--provisioning-opts requires the host to be running macOS 27 (or newer)")
+        }
+
+        let config = try VMConfig.init(fromURL: vmDir.configURL)
+        if config.os != .darwin {
+          throw ValidationError("--provisioning-opts can only be used with macOS VMs")
+        }
+      }
+    #endif
+
     for disk in disk {
       if disk.hasSuffix("-amd64.iso") {
         throw ValidationError("Seems you have a disk targeting x86 architecture (hence amd64 in the name). Please use an 'arm64' version of the disk.")
@@ -407,6 +442,11 @@ struct Run: AsyncParsableCommand {
 
     // Parse root disk options
     let diskOptions = DiskOptions(rootDiskOpts)
+
+    // Parse guest provisioning options
+    #if arch(arm64) && compiler(>=6.4)
+      let provisioning = try provisioningOpts.map { try GuestProvisioningOptions($0) }
+    #endif
 
     vm = try VM(
       vmDir: vmDir,
@@ -473,7 +513,11 @@ struct Run: AsyncParsableCommand {
         #endif
 
         do {
-          try await vm!.start(recovery: recovery, resume: resume)
+          #if arch(arm64) && compiler(>=6.4)
+            try await vm!.start(recovery: recovery, resume: resume, provisioning: provisioning)
+          #else
+            try await vm!.start(recovery: recovery, resume: resume)
+          #endif
         } catch let error as VZError {
           if error.code == .virtualMachineLimitExceeded {
             var hint = ""
@@ -1025,6 +1069,81 @@ struct DiskOptions {
     }
   }
 }
+
+struct GuestProvisioningOptions {
+  var fullName: String?
+  var username: String?
+  var password: String?
+  var logsInAutomatically: Bool?
+  var enablesRemoteLogin: Bool?
+
+  init(_ parseFrom: String) throws {
+    for pair in parseFrom.split(separator: ",") {
+      let keyValue = pair.split(separator: "=", maxSplits: 1)
+      guard keyValue.count == 2 else {
+        throw RuntimeError.VMConfigurationError("invalid provisioning option \"\(pair)\", expected key=value")
+      }
+
+      let key = String(keyValue[0])
+      let value = String(keyValue[1])
+
+      switch key {
+      case "fullName":
+        self.fullName = value
+      case "username":
+        self.username = value
+      case "password":
+        self.password = value
+      case "logsInAutomatically":
+        self.logsInAutomatically = try Self.parseBool(key, value)
+      case "enablesRemoteLogin":
+        self.enablesRemoteLogin = try Self.parseBool(key, value)
+      default:
+        throw RuntimeError.VMConfigurationError("unsupported provisioning option \"\(key)\"")
+      }
+    }
+  }
+
+  private static func parseBool(_ key: String, _ value: String) throws -> Bool {
+    switch value {
+    case "true":
+      return true
+    case "false":
+      return false
+    default:
+      throw RuntimeError.VMConfigurationError("invalid value \"\(value)\" for provisioning option \"\(key)\", expected \"true\" or \"false\"")
+    }
+  }
+}
+
+#if arch(arm64) && compiler(>=6.4)
+  @available(macOS 27, *)
+  extension GuestProvisioningOptions {
+    func toVZMacGuestProvisioningOptions() throws -> VZMacGuestProvisioningOptions {
+      let options = VZMacGuestProvisioningOptions()
+
+      if let fullName = fullName {
+        options.fullName = fullName
+      }
+      if let username = username {
+        options.username = username
+      }
+      if let password = password {
+        options.password = password
+      }
+      if let logsInAutomatically = logsInAutomatically {
+        options.logsInAutomatically = logsInAutomatically
+      }
+      if let enablesRemoteLogin = enablesRemoteLogin {
+        options.enablesRemoteLogin = enablesRemoteLogin
+      }
+
+      try options.validate()
+
+      return options
+    }
+  }
+#endif
 
 struct DirectoryShare {
   let name: String?

@@ -244,13 +244,13 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
     return try VM(vmDir: vmDir)
   }
 
-  func start(recovery: Bool, resume shouldResume: Bool) async throws {
+  func start(recovery: Bool, resume shouldResume: Bool, provisioning: GuestProvisioningOptions? = nil) async throws {
     try network.run(sema)
 
     if shouldResume {
       try await resume()
     } else {
-      try await start(recovery)
+      try await start(recovery, provisioning: provisioning)
     }
   }
 
@@ -286,10 +286,15 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
   }
 
   @MainActor
-  private func start(_ recovery: Bool) async throws {
+  private func start(_ recovery: Bool, provisioning: GuestProvisioningOptions? = nil) async throws {
     #if arch(arm64)
       let startOptions = VZMacOSVirtualMachineStartOptions()
       startOptions.startUpFromMacOSRecovery = recovery
+      #if compiler(>=6.4)
+        if let provisioning = provisioning, #available(macOS 27, *) {
+          try startOptions.setGuestProvisioning(provisioning.toVZMacGuestProvisioningOptions())
+        }
+      #endif
       try await virtualMachine.start(options: startOptions)
     #else
       try await virtualMachine.start()
