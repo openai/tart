@@ -9,7 +9,7 @@ class AgentResolver {
   static func ResolveIP(_ controlSocketPath: String) async throws -> IPv4Address? {
     do {
       return try await resolveIP(controlSocketPath)
-    } catch let error as GRPCConnectionPoolError {
+    } catch is GRPCConnectionPoolError {
       return nil
     }
   }
