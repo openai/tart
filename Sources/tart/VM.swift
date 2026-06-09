@@ -399,7 +399,7 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
     }
 
     // Storage
-    var attachment = try VZDiskImageStorageDeviceAttachment(
+    let attachment = try VZDiskImageStorageDeviceAttachment(
       url: diskURL,
       readOnly: false,
       // When not specified, use "cached" caching mode for Linux VMs to prevent file-system corruption[1]
