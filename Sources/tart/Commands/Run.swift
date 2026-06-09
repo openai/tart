@@ -360,7 +360,7 @@ struct Run: AsyncParsableCommand {
   }
 
   @MainActor
-  func run() async throws {
+  func runOnMainThread() throws {
     let localStorage = try VMStorageLocal()
     let vmDir = try localStorage.open(name)
 
@@ -757,6 +757,11 @@ struct Run: AsyncParsableCommand {
     MainApp.main()
   }
 }
+
+// "tart run" drives an AppKit/SwiftUI run loop and therefore must own the main
+// thread at the top level, so it opts out of Root's asynchronous command path.
+// See Root.main() for the rationale.
+extension Run: MainThreadCommand {}
 
 struct MainApp: App {
   static var suspendable: Bool = false
