@@ -5,8 +5,8 @@ description: Tool for running isolated tasks reproducibly in any environment wit
 
 # Cirrus CLI
 
-Tart itself is only responsible for managing virtual machines, but we've built Tart support into a tool called Cirrus CLI
-also developed by Cirrus Labs. [Cirrus CLI](https://github.com/cirruslabs/cirrus-cli) is a command line tool with
+Tart itself is only responsible for managing virtual machines, but Cirrus Labs built Tart support into a tool called
+[Cirrus CLI](https://github.com/cirruslabs/cirrus-cli), a command line tool with
 one configuration format to execute common CI steps (run a script, cache a folder, etc.) locally or in any CI system.
 We built Cirrus CLI to solve "But it works on my machine!" problem.
 
@@ -38,7 +38,7 @@ cirrus run
 [Cirrus CI](https://cirrus-ci.org/) already leverages Tart to power its macOS cloud infrastructure. The `.cirrus.yml`
 config from above will just work in Cirrus CI and your tasks will be executed inside Tart VMs in our cloud.
 
-**Note:** Cirrus CI only allows [images managed and regularly updated by us](https://github.com/orgs/cirruslabs/packages?tab=packages&q=macos).
+**Note:** Cirrus CI only allows [images managed and regularly updated by Cirrus Labs](https://github.com/orgs/cirruslabs/packages?tab=packages&q=macos).
 
 ## Retrieving artifacts from within Tart VMs
 

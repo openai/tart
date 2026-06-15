@@ -10,7 +10,7 @@ Since the Orchard's initial release, we've managed to maintain the backwards com
 
 In case a new functionality is introduced, you might be required to finish the upgrade of both the Controller and the Worker(s) to be able to use it fully.
 
-In case there will be backwards-incompatible changes introduced in the future, we will try to do our best and highlight this in the [release notes](https://github.com/cirruslabs/orchard/releases) accordingly.
+In case there will be backwards-incompatible changes introduced in the future, we will try to do our best and highlight this in the [release notes](https://github.com/openai/orchard/releases) accordingly.
 
 ## Observability
 

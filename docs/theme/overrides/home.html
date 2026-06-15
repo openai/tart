@@ -1,11 +1,5 @@
 {% extends "base.html" %}
 
-{% block announce %}
-<a href="https://cirruslabs.org/">
-  ️🎉🎉🎉️&nbsp&nbspBig milestone for Cirrus Labs &mdash; we’re joining <strong>OpenAI</strong> to work on Agent Infrastructure&nbsp;&nbsp;🎉🎉🎉
-</a>
-{% endblock %}
-
 <!-- Render landing page under tabs -->
 {% block tabs %} {{ super() }}
 
@@ -191,7 +185,7 @@
             />
           </div>
           <figcaption class="md-typeset">
-            <h2>Run at scale with <a href="https://github.com/cirruslabs/orchard">Orchard</a></h2>
+            <h2>Run at scale with <a href="https://github.com/openai/orchard">Orchard</a></h2>
             <p>
               Tart toolset includes Orchard Orchestration &mdash; tool to run and manage Tart virtual
               machines at scale on a cluster of Apple Silicon hosts. An Orchard Cluster exposes a simple REST API to
@@ -220,7 +214,7 @@
         </h1>
       </header>
       <script>
-          fetch("https://api.github.com/repos/cirruslabs/tart/releases?per_page=100")
+          fetch("https://api.github.com/repos/openai/tart/releases?per_page=100")
               .then((response) => response.json())
               .then((releases) => {
                   let allDownloads = 0;

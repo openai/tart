@@ -1,4 +1,4 @@
-Orchard has a REST API that follows [OpenAPI specification](https://swagger.io/specification/) and is described in [`api/openapi.yaml`](https://github.com/cirruslabs/orchard/blob/main/api/openapi.yaml).
+Orchard has a REST API that follows [OpenAPI specification](https://swagger.io/specification/) and is described in [`api/openapi.yaml`](https://github.com/openai/orchard/blob/main/api/openapi.yaml).
 
 You can run `orchard dev` locally and navigate to `http://127.0.0.1:6120/v1/` for interactive documentation.
 

@@ -38,4 +38,4 @@ build {
 }
 ```
 
-Here is a [repository with Packer templates](https://github.com/cirruslabs/macos-image-templates) used to build [all the images managed by us](https://github.com/orgs/cirruslabs/packages?tab=packages&q=macos).
+Here is a [repository with Packer templates](https://github.com/cirruslabs/macos-image-templates) used to build [all the images managed by Cirrus Labs](https://github.com/orgs/cirruslabs/packages?tab=packages&q=macos).

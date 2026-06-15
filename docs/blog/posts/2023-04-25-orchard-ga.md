@@ -78,7 +78,7 @@ in “worker” mode on macOS hosts. Orchard controller is using extremely fast 
 
 ## Conclusion
 
-Please give [Orchard](https://github.com/cirruslabs/orchard) a try! To run it locally in development mode on any Apple Silicon device
+Please give [Orchard](https://github.com/openai/orchard) a try! To run it locally in development mode on any Apple Silicon device
 please run the following command:
 
 ```bash
@@ -86,9 +86,9 @@ brew install cirruslabs/cli/orchard
 orchard dev
 ```
 
-This will launch a development cluster with a single worker on your machine. Refer to [Orchard documentation](https://github.com/cirruslabs/orchard#creating-virtual-machines)
+This will launch a development cluster with a single worker on your machine. Refer to [Orchard documentation](https://github.com/openai/orchard#creating-virtual-machines)
 on how to create your first virtual machine and access it.
 
 In a [separate blog post](2023-04-28-orchard-ssh-over-grpc.md)
 we’ll cover how Orchard implements seamless SSH access over a gRPC connection. Stay tuned and please don’t hesitate to
-[reach out](https://github.com/cirruslabs/orchard/discussions/landing)! 
+[open an issue](https://github.com/openai/orchard/issues)!

@@ -2,7 +2,7 @@
 
 Compared to Worker, which can only be deployed on a macOS machine, Controller can be also deployed on Linux.
 
-In fact, we've made a [container image](https://github.com/cirruslabs/orchard/pkgs/container/orchard) to ease deploying the Controller in container-native environments such as Kubernetes.
+In fact, we've made a [container image](https://github.com/orgs/cirruslabs/packages/container/package/orchard) to ease deploying the Controller in container-native environments such as Kubernetes.
 
 Another thing to keep in mind that Orchard API is secured by default: all requests must be authenticated with the credentials of a service account. When you first run Orchard Controller, a `bootstrap-admin` service account will be created automatically and credentials will be printed to the standard output.
 
