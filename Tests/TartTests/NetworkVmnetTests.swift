@@ -2,7 +2,7 @@ import XCTest
 @testable import tart
 
 #if compiler(>=6.4)
-  @available(macOS 27, *)
+  @available(macOS 26, *)
   final class NetworkVmnetTests: XCTestCase {
     func testParsesSingleTCPRule() throws {
       let rules = try NetworkVmnet.parsePortForwardings("2222:22")

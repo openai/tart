@@ -246,11 +246,11 @@ struct Run: AsyncParsableCommand {
   #if compiler(>=6.4)
     @Flag(help: ArgumentHelp("Use native vmnet-backed networking instead of Softnet for port forwarding",
                              discussion: """
-                             Adopts the VZVmnetNetworkDeviceAttachment API introduced in macOS 27 (WWDC26).
+                             Adopts the VZVmnetNetworkDeviceAttachment API introduced in macOS 26.
                              vmnet networks run in-process with no sidecar, so this can replace --net-softnet
                              for the common "CI VM with a few forwarded ports" case.
 
-                             Requires the host to be running macOS 27 (or newer).
+                             Requires the host to be running macOS 26 (or newer).
                              """))
     var netVmnet: Bool = false
 
@@ -363,8 +363,8 @@ struct Run: AsyncParsableCommand {
 
     #if compiler(>=6.4)
       if netVmnet {
-        if #unavailable(macOS 27) {
-          throw ValidationError("--net-vmnet requires the host to be running macOS 27 (or newer)")
+        if #unavailable(macOS 26) {
+          throw ValidationError("--net-vmnet requires the host to be running macOS 26 (or newer)")
         }
       }
     #endif
@@ -733,9 +733,10 @@ struct Run: AsyncParsableCommand {
     }
 
     #if compiler(>=6.4)
-      if netVmnet, #available(macOS 27, *) {
+      if netVmnet, #available(macOS 26, *) {
+        let config = try VMConfig.init(fromURL: vmDir.configURL)
         let portForwardings = try netVmnetExpose.map { try NetworkVmnet.parsePortForwardings($0) } ?? []
-        return try NetworkVmnet(portForwardings: portForwardings)
+        return try NetworkVmnet(vmMACAddress: config.macAddress.string, portForwardings: portForwardings)
       }
     #endif
 
