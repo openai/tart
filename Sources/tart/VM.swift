@@ -66,6 +66,7 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
     self.network = network
     configuration = try Self.craftConfiguration(diskURL: vmDir.diskURL,
                                                 nvramURL: vmDir.nvramURL, vmConfig: config,
+                                                label: name,
                                                 network: network, additionalStorageDevices: additionalStorageDevices,
                                                 directorySharingDevices: directorySharingDevices,
                                                 serialPorts: serialPorts,
@@ -197,7 +198,7 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
       // Initialize the virtual machine and its configuration
       self.network = network
       configuration = try Self.craftConfiguration(diskURL: vmDir.diskURL, nvramURL: vmDir.nvramURL,
-                                                  vmConfig: config, network: network,
+                                                  vmConfig: config, label: name, network: network,
                                                   additionalStorageDevices: additionalStorageDevices,
                                                   directorySharingDevices: directorySharingDevices,
                                                   serialPorts: serialPorts
@@ -315,6 +316,7 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
     diskURL: URL,
     nvramURL: URL,
     vmConfig: VMConfig,
+    label: String? = nil,
     network: Network = NetworkShared(),
     additionalStorageDevices: [VZStorageDeviceConfiguration],
     directorySharingDevices: [VZDirectorySharingDeviceConfiguration],
@@ -444,9 +446,24 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
     // Socket device
     configuration.socketDevices = [VZVirtioSocketDeviceConfiguration()]
 
+    #if compiler(>=6.4)
+      if #available(macOS 27, *), let label, let virtualMachineLabel = Self.virtualMachineLabel(for: label) {
+        configuration.label = virtualMachineLabel
+      }
+    #endif
+
     try configuration.validate()
 
     return configuration
+  }
+
+  static func virtualMachineLabel(for name: String) -> String? {
+    let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmedName.contains(where: { !$0.isWhitespace }) else {
+      return nil
+    }
+
+    return String(trimmedName.prefix(64))
   }
 
   func guestDidStop(_ virtualMachine: VZVirtualMachine) {
