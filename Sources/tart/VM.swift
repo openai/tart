@@ -255,6 +255,16 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
   }
 
   @MainActor
+  func setBalloonTargetMemory(_ targetMemoryBytes: UInt64) throws {
+    guard let balloonDevice = virtualMachine.memoryBalloonDevices.first as? VZVirtioTraditionalMemoryBalloonDevice else {
+      throw RuntimeError.VMConfigurationError("VM has no memory balloon device configured,"
+        + " enable it via \"tart set \(name) --memory-balloon true\"")
+    }
+
+    balloonDevice.targetVirtualMachineMemorySize = targetMemoryBytes
+  }
+
+  @MainActor
   func connect(toPort: UInt32) async throws -> VZVirtioSocketConnection {
     guard let socketDevice = virtualMachine.socketDevices.first else {
       throw RuntimeError.VMSocketFailed(toPort, ", VM has no socket devices configured")
@@ -312,6 +322,48 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
   }
 
   static func craftConfiguration(
+    diskURL: URL,
+    nvramURL: URL,
+    vmConfig: VMConfig,
+    network: Network = NetworkShared(),
+    additionalStorageDevices: [VZStorageDeviceConfiguration],
+    directorySharingDevices: [VZDirectorySharingDeviceConfiguration],
+    serialPorts: [VZSerialPortConfiguration],
+    suspendable: Bool = false,
+    nested: Bool = false,
+    audio: Bool = true,
+    clipboard: Bool = true,
+    sync: VZDiskImageSynchronizationMode = .full,
+    caching: VZDiskImageCachingMode? = nil,
+    noTrackpad: Bool = false,
+    noPointer: Bool = false,
+    noKeyboard: Bool = false
+  ) throws -> VZVirtualMachineConfiguration {
+    let configuration = try buildConfiguration(diskURL: diskURL,
+                                               nvramURL: nvramURL, vmConfig: vmConfig,
+                                               network: network, additionalStorageDevices: additionalStorageDevices,
+                                               directorySharingDevices: directorySharingDevices,
+                                               serialPorts: serialPorts,
+                                               suspendable: suspendable,
+                                               nested: nested,
+                                               audio: audio,
+                                               clipboard: clipboard,
+                                               sync: sync,
+                                               caching: caching,
+                                               noTrackpad: noTrackpad,
+                                               noPointer: noPointer,
+                                               noKeyboard: noKeyboard
+    )
+
+    try configuration.validate()
+
+    return configuration
+  }
+
+  // Builds the virtual machine configuration without validating it, since
+  // validation requires the "com.apple.security.virtualization" entitlement
+  // that unit tests don't have
+  static func buildConfiguration(
     diskURL: URL,
     nvramURL: URL,
     vmConfig: VMConfig,
@@ -423,6 +475,17 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
       configuration.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]
     }
 
+    // Memory balloon
+    //
+    // Allows the host to reclaim memory from the guest on a best-effort
+    // basis, provided that the guest OS supports the virtio-balloon device.
+    //
+    // Skipped for suspendable VMs (similarly to the entropy device above)
+    // to not interfere with the save/restore support.
+    if vmConfig.memoryBalloon && !suspendable {
+      configuration.memoryBalloonDevices = [VZVirtioTraditionalMemoryBalloonDeviceConfiguration()]
+    }
+
     // Directory sharing devices
     configuration.directorySharingDevices = directorySharingDevices
 
@@ -443,8 +506,6 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
 
     // Socket device
     configuration.socketDevices = [VZVirtioSocketDeviceConfiguration()]
-
-    try configuration.validate()
 
     return configuration
   }

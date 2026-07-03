@@ -26,6 +26,7 @@ enum CodingKeys: String, CodingKey {
   case display
   case displayRefit
   case diskFormat
+  case memoryBalloon
 
   // macOS-specific keys
   case ecid
@@ -66,6 +67,7 @@ struct VMConfig: Codable {
   var display: VMDisplayConfig = VMDisplayConfig()
   var displayRefit: Bool?
   var diskFormat: DiskImageFormat = .raw
+  var memoryBalloon: Bool = false
 
   init(
     platform: Platform,
@@ -140,6 +142,7 @@ struct VMConfig: Codable {
     displayRefit = try container.decodeIfPresent(Bool.self, forKey: .displayRefit)
     let diskFormatString = try container.decodeIfPresent(String.self, forKey: .diskFormat) ?? "raw"
     diskFormat = DiskImageFormat(rawValue: diskFormatString) ?? .raw
+    memoryBalloon = try container.decodeIfPresent(Bool.self, forKey: .memoryBalloon) ?? false
   }
 
   func encode(to encoder: Encoder) throws {
@@ -159,6 +162,12 @@ struct VMConfig: Codable {
       try container.encode(displayRefit, forKey: .displayRefit)
     }
     try container.encode(diskFormat.rawValue, forKey: .diskFormat)
+    // Only write the key when the balloon is enabled, so that configurations
+    // of VMs that don't use this feature remain byte-identical to those
+    // produced by older Tart versions
+    if memoryBalloon {
+      try container.encode(memoryBalloon, forKey: .memoryBalloon)
+    }
   }
 
   mutating func setCPU(cpuCount: Int) throws {
