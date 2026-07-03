@@ -78,6 +78,25 @@ final class MemoryBalloonTests: XCTestCase {
     XCTAssertNoThrow(try Run.validateBalloonTargetMemory(4096, vmConfig: vmConfig))
   }
 
+  func testBalloonTargetMemoryValidationRespectsDarwinMinimum() throws {
+    // A macOS guest whose restore image requires 4096 MB of memory at minimum
+    var vmConfig = VMConfig(platform: Linux(), cpuCountMin: 1, memorySizeMin: 4096 * 1024 * 1024)
+    vmConfig.os = .darwin
+    vmConfig.memoryBalloon = true
+    try vmConfig.setMemory(memorySize: 8192 * 1024 * 1024)
+
+    // Target below the restore image's minimum supported memory size
+    XCTAssertThrowsError(try Run.validateBalloonTargetMemory(2048, vmConfig: vmConfig))
+
+    // Target at the restore image's minimum supported memory size
+    XCTAssertNoThrow(try Run.validateBalloonTargetMemory(4096, vmConfig: vmConfig))
+
+    // The same minimum doesn't apply to Linux guests, similarly
+    // to how "tart set --memory" doesn't restrict them
+    vmConfig.os = .linux
+    XCTAssertNoThrow(try Run.validateBalloonTargetMemory(2048, vmConfig: vmConfig))
+  }
+
   func testBalloonDeviceOnlyConfiguredWhenEnabled() throws {
     // Disabled by default
     XCTAssertEqual(try craftConfiguration().memoryBalloonDevices.count, 0)

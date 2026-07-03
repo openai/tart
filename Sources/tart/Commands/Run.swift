@@ -429,7 +429,13 @@ struct Run: AsyncParsableCommand {
         + " configured memory size of \(vmConfig.memorySize / 1024 / 1024) MB")
     }
 
-    let minimumAllowedMemorySize = VZVirtualMachineConfiguration.minimumAllowedMemorySize
+    var minimumAllowedMemorySize = VZVirtualMachineConfiguration.minimumAllowedMemorySize
+    if vmConfig.os == .darwin {
+      // macOS guests additionally have a minimum supported memory size
+      // dictated by the restore image they were created from, similarly
+      // to how "tart set --memory" restricts the configured memory size
+      minimumAllowedMemorySize = max(minimumAllowedMemorySize, vmConfig.memorySizeMin)
+    }
     if targetMemoryBytes < minimumAllowedMemorySize {
       throw ValidationError("--balloon-target-memory (\(targetMemoryMB) MB) is too small,"
         + " it should be at least \(minimumAllowedMemorySize / 1024 / 1024) MB")
