@@ -2,7 +2,7 @@
 
 set -e
 
-export VERSION="${CIRRUS_TAG:-0}"
+export VERSION="${VERSION:-0}"
 
 mkdir -p .ci/pkg/
 cp .build/arm64-apple-macosx/release/tart .ci/pkg/tart
