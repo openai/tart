@@ -52,6 +52,7 @@ release:
 
 brews:
   - name: tart
+    directory: Formula
     repository:
       owner: openai
       name: homebrew-tools
