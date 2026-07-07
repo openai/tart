@@ -29,12 +29,17 @@ extension VMDirectory {
     let ociConfigContainer = OCIConfig.ConfigContainer(Labels: labels)
     let ociConfigJSON = try OCIConfig(architecture: config.arch, os: config.os, config: ociConfigContainer).toJSON()
     let ociConfigDigest = try await archive.pushBlob(fromData: ociConfigJSON, chunkSizeMb: 0, digest: nil)
-    let manifest = OCIManifest(
-      config: OCIManifestConfig(size: ociConfigJSON.count, digest: ociConfigDigest),
+
+    var manifestConfig = OCIManifestConfig(size: ociConfigJSON.count, digest: ociConfigDigest)
+    manifestConfig.mediaType = dockerConfigMediaType
+
+    var manifest = OCIManifest(
+      config: manifestConfig,
       layers: layers,
       uncompressedDiskSize: UInt64(diskSize),
       uploadDate: Date()
     )
+    manifest.mediaType = dockerManifestMediaType
 
     let tagRef = tag ?? "latest"
     defaultLogger.appendNewLine("saving manifest...")

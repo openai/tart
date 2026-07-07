@@ -66,7 +66,7 @@ extension OCIArchiveWriter: BlobStorage {
     var manifests: [[String: Any]] = []
 
     let baseDescriptor: [String: Any] = [
-      "mediaType": ociManifestMediaType,
+      "mediaType": dockerManifestMediaType,
       "digest": manifestDigest,
       "size": manifestSize,
     ]
