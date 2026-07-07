@@ -3,6 +3,7 @@ import Foundation
 class OCIArchiveWriter {
   private let tmpDir: URL
   private let blobsDir: URL
+  private let lock: FileLock
   private var manifestDigest: String?
   private var manifestSize: Int?
   private var manifestReferences: [String] = []
@@ -12,9 +13,14 @@ class OCIArchiveWriter {
     tmpDir = try Config().tartTmpDir.appendingPathComponent(UUID().uuidString)
     blobsDir = tmpDir.appendingPathComponent("blobs/sha256")
     try FileManager.default.createDirectory(at: blobsDir, withIntermediateDirectories: true)
+    lock = try FileLock(lockURL: tmpDir)
+    if try !lock.trylock() {
+      throw RuntimeError.Generic("failed to lock archive staging directory")
+    }
   }
 
   deinit {
+    try? lock.unlock()
     try? FileManager.default.removeItem(at: tmpDir)
   }
 }
