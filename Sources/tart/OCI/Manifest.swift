@@ -8,6 +8,9 @@ let ociConfigMediaType = "application/vnd.oci.image.config.v1+json"
 let dockerManifestMediaType = "application/vnd.docker.distribution.manifest.v2+json"
 let dockerConfigMediaType = "application/vnd.docker.container.image.v1+json"
 
+// Standard OCI layer media type
+let ociLayerMediaType = "application/vnd.oci.image.layer.v1.tar+gzip"
+
 // Layer media types
 let configMediaType = "application/vnd.cirruslabs.tart.config.v1"
 let diskV2MediaType = "application/vnd.cirruslabs.tart.disk.v2"

@@ -1,7 +1,7 @@
 import Foundation
 
 class OCIArchiveWriter {
-  private let tmpDir: URL
+  let tmpDir: URL
   private let blobsDir: URL
   private let lock: FileLock
   private var manifestDigest: String?
@@ -72,7 +72,7 @@ extension OCIArchiveWriter: BlobStorage {
     var manifests: [[String: Any]] = []
 
     let baseDescriptor: [String: Any] = [
-      "mediaType": dockerManifestMediaType,
+      "mediaType": ociManifestMediaType,
       "digest": manifestDigest,
       "size": manifestSize,
     ]

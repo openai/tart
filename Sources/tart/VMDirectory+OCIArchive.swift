@@ -4,42 +4,53 @@ extension VMDirectory {
   func saveToArchive(path: String, concurrency: UInt, labels: [String: String] = [:], tag: String? = nil) async throws {
     let archive = try OCIArchiveWriter()
 
-    var layers = [OCIManifestLayer]()
+    let diskSize = try FileManager.default.attributesOfItem(atPath: diskURL.path)[.size] as! Int64
+
+    // Create a standard tar+gzip layer containing VM files
+    defaultLogger.appendNewLine("archiving disk... this will take a while...")
+    let progress = Progress(totalUnitCount: diskSize)
+    ProgressObserver(progress).log(defaultLogger)
+
+    let layerTarGz = archive.tmpDir.appendingPathComponent("layer.tar.gz")
+
+    let tarProcess = Process()
+    tarProcess.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+    tarProcess.arguments = ["-czf", layerTarGz.path, "-C", baseURL.path,
+                            "disk.img", "nvram.bin", "config.json"]
+
+    let tarPipe = Pipe()
+    tarProcess.standardError = tarPipe
+
+    try tarProcess.run()
+    tarProcess.waitUntilExit()
+
+    if tarProcess.terminationStatus != 0 {
+      let errorData = tarPipe.fileHandleForReading.readDataToEndOfFile()
+      throw RuntimeError.Generic(
+        "creating archive layer failed: \(String(data: errorData, encoding: .utf8) ?? "unknown error")"
+      )
+    }
+
+    let layerData = try Data(contentsOf: layerTarGz, options: .alwaysMapped)
+    let layerDigest = try await archive.pushBlob(fromData: layerData, chunkSizeMb: 0, digest: nil)
+    progress.completedUnitCount = diskSize
 
     let config = try VMConfig(fromURL: configURL)
     var labels = labels
     labels[diskFormatLabel] = config.diskFormat.rawValue
-    let configJSON = try JSONEncoder().encode(config)
-    defaultLogger.appendNewLine("saving config...")
-    let configDigest = try await archive.pushBlob(fromData: configJSON, chunkSizeMb: 0, digest: nil)
-    layers.append(OCIManifestLayer(mediaType: configMediaType, size: configJSON.count, digest: configDigest))
-
-    let diskSize = try FileManager.default.attributesOfItem(atPath: diskURL.path)[.size] as! Int64
-    defaultLogger.appendNewLine("saving disk... this will take a while...")
-    let progress = Progress(totalUnitCount: diskSize)
-    ProgressObserver(progress).log(defaultLogger)
-
-    layers.append(contentsOf: try await DiskV2.push(diskURL: diskURL, registry: archive, chunkSizeMb: 0, concurrency: concurrency, progress: progress))
-
-    defaultLogger.appendNewLine("saving NVRAM...")
-    let nvram = try FileHandle(forReadingFrom: nvramURL).readToEnd()!
-    let nvramDigest = try await archive.pushBlob(fromData: nvram, chunkSizeMb: 0, digest: nil)
-    layers.append(OCIManifestLayer(mediaType: nvramMediaType, size: nvram.count, digest: nvramDigest))
 
     let ociConfigContainer = OCIConfig.ConfigContainer(Labels: labels)
     let ociConfigJSON = try OCIConfig(architecture: config.arch, os: config.os, config: ociConfigContainer).toJSON()
     let ociConfigDigest = try await archive.pushBlob(fromData: ociConfigJSON, chunkSizeMb: 0, digest: nil)
 
-    var manifestConfig = OCIManifestConfig(size: ociConfigJSON.count, digest: ociConfigDigest)
-    manifestConfig.mediaType = dockerConfigMediaType
-
-    var manifest = OCIManifest(
-      config: manifestConfig,
-      layers: layers,
+    let manifest = OCIManifest(
+      config: OCIManifestConfig(size: ociConfigJSON.count, digest: ociConfigDigest),
+      layers: [
+        OCIManifestLayer(mediaType: ociLayerMediaType, size: layerData.count, digest: layerDigest)
+      ],
       uncompressedDiskSize: UInt64(diskSize),
       uploadDate: Date()
     )
-    manifest.mediaType = dockerManifestMediaType
 
     let tagRef = tag ?? "latest"
     defaultLogger.appendNewLine("saving manifest...")
