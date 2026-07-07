@@ -50,7 +50,7 @@ Many companies are using Tart in their internal setups. Here are just a few of t
 Try running a Tart VM on your Apple Silicon device running macOS 13.0 (Ventura) or later (will download a 25 GB image):
 
 ```bash
-brew install cirruslabs/cli/tart
+brew install openai/tools/tart
 tart clone ghcr.io/cirruslabs/macos-tahoe-base:latest tahoe-base
 tart run tahoe-base
 ```

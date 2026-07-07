@@ -9,7 +9,7 @@ or [through the API](integration-guide.md).
 The easiest way to start is to run Orchard in local development mode:
 
 ```shell
-brew install cirruslabs/cli/orchard
+brew install openai/tools/orchard
 orchard dev
 ```
 

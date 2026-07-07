@@ -31,7 +31,7 @@ In this deployment method, we'll create a new job definition file for the launch
 To begin, first install Orchard:
 
 ```shell
-brew install cirruslabs/cli/orchard
+brew install openai/tools/orchard
 ```
 
 Ensure that the following command:
