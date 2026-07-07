@@ -1,7 +1,7 @@
 import Foundation
 
 class OCIArchiveWriter {
-  let tmpDir: URL
+  private let tmpDir: URL
   private let blobsDir: URL
   private let lock: FileLock
   private var manifestDigest: String?
