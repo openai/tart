@@ -129,6 +129,11 @@ struct Exec: AsyncParsableCommand {
               let data = handle.availableData
 
               if data.isEmpty {
+                // EOF: unregister the handler, otherwise the fd stays permanently
+                // "readable" and Foundation re-invokes us in a tight loop, burning
+                // 100% of a core for the rest of the command's lifetime
+                handle.readabilityHandler = nil
+
                 continuation.finish()
               } else {
                 continuation.yield(data)
