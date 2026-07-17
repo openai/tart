@@ -34,6 +34,7 @@ jobs:
         run: |
           echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/build.keychain"
+          security set-keychain-settings -lut 21600 "$RUNNER_TEMP/build.keychain"
           security default-keychain -s "$RUNNER_TEMP/build.keychain"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/build.keychain"
           security import "$RUNNER_TEMP/certificate.p12" \
@@ -46,8 +47,7 @@ jobs:
             -s \
             -k "$KEYCHAIN_PASSWORD" \
             "$RUNNER_TEMP/build.keychain"
-      - name: Install gon
-        run: brew install mitchellh/gon/gon
+          security list-keychain -d user -s "$RUNNER_TEMP/build.keychain"
       - name: Create release app token for this repo
         id: app-token
         uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
@@ -72,7 +72,6 @@ jobs:
           version: "~> v2"
           args: release --clean
         env:
-          AC_PASSWORD: ${{ secrets.AC_PASSWORD }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ steps.tap-token.outputs.token }}
