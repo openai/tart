@@ -14,7 +14,7 @@ final class LayerizerTests: XCTestCase {
     do {
       registryRunner = try await RegistryRunner()
     } catch {
-      try XCTSkip("Registry is unavailable: \(error)")
+      throw XCTSkip("Registry is unavailable: \(error)")
     }
   }
 

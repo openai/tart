@@ -28,7 +28,6 @@ jobs:
           persist-credentials: false
       - name: Import signing certificate
         env:
-          AC_PASSWORD: ${{ secrets.AC_PASSWORD }}
           KEYCHAIN_PASSWORD: temporary-password
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           P12_PASSWORD: password101
@@ -47,10 +46,6 @@ jobs:
             -s \
             -k "$KEYCHAIN_PASSWORD" \
             "$RUNNER_TEMP/build.keychain"
-          xcrun notarytool store-credentials notarytool \
-            --apple-id hello@cirruslabs.org \
-            --team-id 9M2P8L4D89 \
-            --password "$AC_PASSWORD"
       - name: Install gon
         run: brew install mitchellh/gon/gon
       - name: Create release app token for this repo
@@ -77,6 +72,7 @@ jobs:
           version: "~> v2"
           args: release --clean
         env:
+          AC_PASSWORD: ${{ secrets.AC_PASSWORD }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ steps.tap-token.outputs.token }}
