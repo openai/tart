@@ -30,7 +30,8 @@ universal_binaries:
         - cp Resources/embedded.provisionprofile dist/tart_darwin_all/tart.app/Contents/
         - cp Resources/Info.plist dist/tart_darwin_all/tart.app/Contents/
         - cp "Resources/actool/UPW Tart.icns" "Resources/actool/Assets.car" dist/tart_darwin_all/tart.app/Contents/Resources/
-        - .ci/sign-release.sh
+        - cmd: .ci/sign-release.sh
+          output: true
 
 archives:
   - name_template: "{{ .ProjectName }}"
