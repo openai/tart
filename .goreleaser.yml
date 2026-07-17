@@ -5,8 +5,8 @@ project_name: tart
 before:
   hooks:
     - .ci/set-version.sh
-    - swift build --arch arm64 --configuration release --product tart
-    - swift build --arch x86_64 --configuration release --product tart
+    - sh .ci/build-release.sh arm64
+    - sh .ci/build-release.sh x86_64
 
 builds:
   - id: tart
@@ -19,7 +19,7 @@ builds:
       - amd64
     binary: tart.app/Contents/MacOS/tart
     prebuilt:
-      path: '.build/{{- if eq .Arch "arm64" }}arm64{{- else }}x86_64{{ end }}-apple-macosx/release/tart'
+      path: '.build/prebuilt/{{- if eq .Arch "arm64" }}arm64{{- else }}x86_64{{ end }}/tart'
 
 universal_binaries:
   - name_template: tart.app/Contents/MacOS/tart
@@ -30,7 +30,7 @@ universal_binaries:
         - cp Resources/embedded.provisionprofile dist/tart_darwin_all/tart.app/Contents/
         - cp Resources/Info.plist dist/tart_darwin_all/tart.app/Contents/
         - cp "Resources/actool/UPW Tart.icns" "Resources/actool/Assets.car" dist/tart_darwin_all/tart.app/Contents/Resources/
-        - gon gon.hcl
+        - .ci/sign-release.sh
 
 archives:
   - name_template: "{{ .ProjectName }}"
@@ -52,9 +52,14 @@ release:
 
 brews:
   - name: tart
+    directory: Formula
     repository:
-      owner: cirruslabs
-      name: homebrew-cli
+      owner: openai
+      name: homebrew-tools
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+      branch: "tart-{{ .Version }}"
+      pull_request:
+        enabled: true
     caveats: |
       Tart has been installed. You might want to reduce the default DHCP lease time
       from 86,400 to 600 seconds to avoid DHCP shortage when running lots of VMs daily:
@@ -62,12 +67,12 @@ brews:
         sudo defaults write /Library/Preferences/SystemConfiguration/com.apple.InternetSharing.default.plist bootpd -dict DHCPLeaseTimeSecs -int 600
 
       See https://tart.run/faq/#changing-the-default-dhcp-lease-time for more details.
-    homepage: https://github.com/cirruslabs/tart
-    license: "Fair Source"
+    homepage: https://github.com/openai/tart
+    license: FSL-1.1-ALv2
     description: Run macOS and Linux VMs on Apple Hardware
     skip_upload: auto
     dependencies:
-      - "cirruslabs/cli/softnet"
+      - "openai/tools/softnet"
     install: |
       libexec.install Dir["*"]
       bin.write_exec_script "#{libexec}/tart.app/Contents/MacOS/tart"

@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  merge_group:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: integration-tests/go.mod
+          cache-dependency-path: integration-tests/go.sum
+      - name: Build
+        run: swift build --build-system swiftbuild
+      - name: Run unit tests
+        run: |
+          export PATH="$PATH:/usr/sbin"
+          swift test --build-system swiftbuild
+      # The Python suite boots Tart VMs, but hosted ARM macOS runners do not support nested virtualization.
+      - name: Run OpenTelemetry integration tests
+        run: |
+          bin_path="$(swift build --build-system swiftbuild --show-bin-path)"
+          codesign --sign - --entitlements Resources/tart-dev.entitlements --force "$bin_path/tart"
+          cd integration-tests
+          PATH="$bin_path:$PATH" go test -v ./...

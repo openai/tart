@@ -3,7 +3,7 @@
 The easiest way to install Orchard CLI is through the [Homebrew](https://brew.sh/):
 
 ```shell
-brew install cirruslabs/cli/orchard
+brew install openai/tools/orchard
 ```
 
 Binaries and packages for other architectures can be found in [GitHub Releases](https://github.com/openai/orchard/releases).

@@ -9,7 +9,7 @@ permissions:
 jobs:
   build_cached:
     name: Build tart (cached)
-    runs-on: ghcr.io/cirruslabs/macos-runner:tahoe
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
@@ -29,7 +29,7 @@ jobs:
 
   build_no_cache:
     name: Build tart (no cache)
-    runs-on: ghcr.io/cirruslabs/macos-runner:tahoe
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
