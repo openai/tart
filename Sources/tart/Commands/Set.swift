@@ -14,6 +14,17 @@ struct Set: AsyncParsableCommand {
   @Option(help: "VM memory size in megabytes")
   var memory: UInt64?
 
+  @Option(help: ArgumentHelp("Attach a virtio memory balloon device to the VM (true or false)", discussion: """
+  When enabled, the host can ask the guest to release some of its memory on a best-effort basis
+  (see "tart run --help" on the --balloon-target-memory option for more details).
+
+  Note that this is not dynamic memory expansion nor transparent memory overcommit: the guest
+  always sees the configured memory size, and the reclaim only works when the guest OS supports
+  the virtio-balloon device. Linux guests generally support it, while macOS guests may show
+  limited or no practical memory reduction.
+  """, valueName: "true|false"))
+  var memoryBalloon: Bool?
+
   @Option(help: "VM display resolution in a format of WIDTHxHEIGHT[pt|px]. For example, 1200x800, 1200x800pt or 1920x1080px. Units are treated as hints and default to \"pt\" (points) for macOS VMs and \"px\" (pixels) for Linux VMs when not specified.")
   var display: VMDisplayConfig?
 
@@ -47,6 +58,10 @@ struct Set: AsyncParsableCommand {
 
     if let memory = memory {
       try vmConfig.setMemory(memorySize: memory * 1024 * 1024)
+    }
+
+    if let memoryBalloon = memoryBalloon {
+      vmConfig.memoryBalloon = memoryBalloon
     }
 
     if let display = display {
