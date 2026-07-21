@@ -13,10 +13,22 @@ class Softnet: Network {
   private let process = Process()
   private var monitorTask: Task<Void, Error>? = nil
   private let monitorTaskFinished = ManagedAtomic<Bool>(false)
+  private var controlFD: Int32?
 
   let vmFD: Int32
 
-  init(vmMACAddress: String, extraArguments: [String] = []) throws {
+  init(vmMACAddress: String, extraArguments: [String] = [], controlFD: Int32? = nil) throws {
+    if let controlFD = controlFD {
+      do {
+        try Self.validateControlFD(controlFD)
+      } catch {
+        close(controlFD)
+        throw error
+      }
+    }
+
+    self.controlFD = controlFD
+
     let fds = UnsafeMutablePointer<Int32>.allocate(capacity: MemoryLayout<Int>.stride * 2)
 
     let ret = socketpair(AF_UNIX, SOCK_DGRAM, 0, fds)
@@ -33,6 +45,48 @@ class Softnet: Network {
     process.executableURL = try Self.softnetExecutableURL()
     process.arguments = ["--vm-fd", String(STDIN_FILENO), "--vm-mac-address", vmMACAddress] + extraArguments
     process.standardInput = FileHandle(fileDescriptor: softnetFD, closeOnDealloc: false)
+
+    if let controlFD = controlFD {
+      process.arguments! += ["--control-fd", String(STDOUT_FILENO)]
+      process.standardOutput = FileHandle(fileDescriptor: controlFD, closeOnDealloc: false)
+    }
+  }
+
+  deinit {
+    closeControlFD()
+  }
+
+  static func validateControlFD(_ fd: Int32) throws {
+    guard fd > STDERR_FILENO else {
+      throw SoftnetError.InitializationFailed(why: "Softnet control file descriptor must be greater than 2")
+    }
+
+    var socketType: Int32 = 0
+    var socketTypeLength = socklen_t(MemoryLayout<Int32>.size)
+    guard getsockopt(fd, SOL_SOCKET, SO_TYPE, &socketType, &socketTypeLength) == 0 else {
+      let details = Errno(rawValue: CInt(errno))
+      throw SoftnetError.InitializationFailed(why: "Softnet control file descriptor is not a socket: \(details)")
+    }
+
+    guard socketType == SOCK_STREAM else {
+      throw SoftnetError.InitializationFailed(why: "Softnet control file descriptor must be a Unix stream socket")
+    }
+
+    var peerAddress = sockaddr_storage()
+    var peerAddressLength = socklen_t(MemoryLayout<sockaddr_storage>.size)
+    let result = withUnsafeMutablePointer(to: &peerAddress) { pointer in
+      pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        getpeername(fd, $0, &peerAddressLength)
+      }
+    }
+    guard result == 0 else {
+      let details = Errno(rawValue: CInt(errno))
+      throw SoftnetError.InitializationFailed(why: "Softnet control file descriptor is not connected: \(details)")
+    }
+
+    guard peerAddress.ss_family == sa_family_t(AF_UNIX) else {
+      throw SoftnetError.InitializationFailed(why: "Softnet control file descriptor must be a Unix stream socket")
+    }
   }
 
   static func softnetExecutableURL() throws -> URL {
@@ -46,6 +100,8 @@ class Softnet: Network {
   }
 
   func run(_ sema: AsyncSemaphore) throws {
+    defer { closeControlFD() }
+
     try process.run()
 
     monitorTask = Task {
@@ -57,6 +113,13 @@ class Softnet: Network {
 
       // Signal to ourselves that the Softnet has finished
       monitorTaskFinished.store(true, ordering: .sequentiallyConsistent)
+    }
+  }
+
+  private func closeControlFD() {
+    if let controlFD = controlFD {
+      close(controlFD)
+      self.controlFD = nil
     }
   }
 

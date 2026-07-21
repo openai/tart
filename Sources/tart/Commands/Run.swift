@@ -224,6 +224,13 @@ struct Run: AsyncParsableCommand {
   """, valueName: "comma-separated CIDRs"))
   var netSoftnetBlock: String?
 
+  @Option(help: ArgumentHelp("Connected Unix stream socket file descriptor to use for the Softnet control channel (e.g. --net-softnet-control-fd=3)", discussion: """
+  This option enables the Softnet control channel on an inherited Unix stream socket. It can be used to dynamically replace Softnet allow and block lists while the VM is running.
+
+  The file descriptor must be greater than 2. Implies --net-softnet unless --net-host is specified.
+  """, valueName: "file descriptor"))
+  var netSoftnetControlFd: Int32?
+
   @Option(help: ArgumentHelp("Comma-separated list of TCP ports to expose (e.g. --net-softnet-expose 2222:22,8080:80)", discussion: """
   Options are comma-separated and are as follows:
 
@@ -313,7 +320,7 @@ struct Run: AsyncParsableCommand {
     }
 
     // Automatically enable --net-softnet when any of its related options are specified
-    if netSoftnetAllow != nil || netSoftnetBlock != nil || netSoftnetExpose != nil {
+    if netSoftnetAllow != nil || netSoftnetBlock != nil || netSoftnetExpose != nil || (netSoftnetControlFd != nil && !netHost) {
       netSoftnet = true
     }
 
@@ -681,13 +688,13 @@ struct Run: AsyncParsableCommand {
     if netSoftnet {
       let config = try VMConfig.init(fromURL: vmDir.configURL)
 
-      return try Softnet(vmMACAddress: config.macAddress.string, extraArguments: softnetExtraArguments)
+      return try Softnet(vmMACAddress: config.macAddress.string, extraArguments: softnetExtraArguments, controlFD: netSoftnetControlFd)
     }
 
     if netHost {
       let config = try VMConfig.init(fromURL: vmDir.configURL)
 
-      return try Softnet(vmMACAddress: config.macAddress.string, extraArguments: ["--vm-net-type", "host"] + softnetExtraArguments)
+      return try Softnet(vmMACAddress: config.macAddress.string, extraArguments: ["--vm-net-type", "host"] + softnetExtraArguments, controlFD: netSoftnetControlFd)
     }
 
     if netBridged.count > 0 {
