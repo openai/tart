@@ -67,8 +67,8 @@ final class SoftnetControlFDTests: XCTestCase {
     control = socket.socket(fileno=1)
     assert vm.family == socket.AF_UNIX and vm.type == socket.SOCK_DGRAM
     assert control.family == socket.AF_UNIX and control.type == socket.SOCK_STREAM
-    assert control.recv(4096) == b"policy.replace\\n"
-    control.sendall(b"policy.replaced\\n")
+    assert control.recv(4096) == b"softnet.policy.set\\n"
+    control.sendall(b"ok\\n")
     """
     try script.write(to: executable, atomically: true, encoding: .utf8)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
@@ -91,13 +91,13 @@ final class SoftnetControlFDTests: XCTestCase {
     XCTAssertEqual(fcntl(fds[0], F_GETFD), -1)
     XCTAssertEqual(errno, EBADF)
 
-    let request = Array("policy.replace\n".utf8)
+    let request = Array("softnet.policy.set\n".utf8)
     XCTAssertEqual(request.withUnsafeBytes { send(fds[1], $0.baseAddress, $0.count, 0) }, request.count)
 
     var response = [UInt8](repeating: 0, count: 128)
     let received = recv(fds[1], &response, response.count, 0)
     XCTAssertGreaterThan(received, 0)
-    XCTAssertEqual(String(decoding: response.prefix(Int(max(received, 0))), as: UTF8.self), "policy.replaced\n")
+    XCTAssertEqual(String(decoding: response.prefix(Int(max(received, 0))), as: UTF8.self), "ok\n")
 
     await semaphore.wait()
   }
