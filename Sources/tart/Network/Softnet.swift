@@ -13,21 +13,20 @@ class Softnet: Network {
   private let process = Process()
   private var monitorTask: Task<Void, Error>? = nil
   private let monitorTaskFinished = ManagedAtomic<Bool>(false)
-  private var controlFD: Int32?
 
   let vmFD: Int32
 
   init(vmMACAddress: String, extraArguments: [String] = [], controlFD: Int32? = nil) throws {
-    if let controlFD = controlFD {
-      do {
-        try Self.validateControlFD(controlFD)
-      } catch {
-        close(controlFD)
-        throw error
-      }
-    }
+    var controlFileHandle: FileHandle?
 
-    self.controlFD = controlFD
+    if let controlFD = controlFD {
+      guard controlFD > STDERR_FILENO else {
+        throw SoftnetError.InitializationFailed(why: "Softnet control file descriptor must be greater than 2")
+      }
+
+      controlFileHandle = FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)
+      try Self.validateControlFD(controlFD)
+    }
 
     let fds = UnsafeMutablePointer<Int32>.allocate(capacity: MemoryLayout<Int>.stride * 2)
 
@@ -46,14 +45,10 @@ class Softnet: Network {
     process.arguments = ["--vm-fd", String(STDIN_FILENO), "--vm-mac-address", vmMACAddress] + extraArguments
     process.standardInput = FileHandle(fileDescriptor: softnetFD, closeOnDealloc: false)
 
-    if let controlFD = controlFD {
+    if let controlFileHandle = controlFileHandle {
       process.arguments! += ["--control-fd", String(STDOUT_FILENO)]
-      process.standardOutput = FileHandle(fileDescriptor: controlFD, closeOnDealloc: false)
+      process.standardOutput = controlFileHandle
     }
-  }
-
-  deinit {
-    closeControlFD()
   }
 
   static func validateControlFD(_ fd: Int32) throws {
@@ -100,7 +95,7 @@ class Softnet: Network {
   }
 
   func run(_ sema: AsyncSemaphore) throws {
-    defer { closeControlFD() }
+    defer { try? (process.standardOutput as? FileHandle)?.close() }
 
     try process.run()
 
@@ -113,13 +108,6 @@ class Softnet: Network {
 
       // Signal to ourselves that the Softnet has finished
       monitorTaskFinished.store(true, ordering: .sequentiallyConsistent)
-    }
-  }
-
-  private func closeControlFD() {
-    if let controlFD = controlFD {
-      close(controlFD)
-      self.controlFD = nil
     }
   }
 

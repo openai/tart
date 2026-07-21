@@ -51,6 +51,16 @@ final class SoftnetControlFDTests: XCTestCase {
     XCTAssertThrowsError(try Softnet.validateControlFD(STDERR_FILENO))
   }
 
+  func testStandardDescriptorsRemainOpenWhenInitializationFails() throws {
+    for fd in [STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO] {
+      let flags = fcntl(fd, F_GETFD)
+      XCTAssertNotEqual(flags, -1)
+
+      XCTAssertThrowsError(try Softnet(vmMACAddress: "02:00:00:00:00:01", controlFD: fd))
+      XCTAssertEqual(fcntl(fd, F_GETFD), flags)
+    }
+  }
+
   func testControlChannelIsPassedToSoftnetAndVMFDRemainsDatagram() async throws {
     let temporaryDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: false)
