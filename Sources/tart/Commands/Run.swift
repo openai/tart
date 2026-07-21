@@ -227,7 +227,7 @@ struct Run: AsyncParsableCommand {
   @Option(help: ArgumentHelp("Connected Unix stream socket file descriptor to use for the Softnet control channel (e.g. --net-softnet-control-fd=3)", discussion: """
   This option enables the Softnet control channel on an inherited Unix stream socket. It can be used to dynamically replace Softnet allow and block lists while the VM is running.
 
-  The file descriptor must be greater than 2. Implies --net-softnet unless --net-host is specified.
+  The file descriptor must be greater than 2. Implies --net-softnet.
   """, valueName: "file descriptor"))
   var netSoftnetControlFd: Int32?
 
@@ -320,7 +320,7 @@ struct Run: AsyncParsableCommand {
     }
 
     // Automatically enable --net-softnet when any of its related options are specified
-    if netSoftnetAllow != nil || netSoftnetBlock != nil || netSoftnetExpose != nil || (netSoftnetControlFd != nil && !netHost) {
+    if netSoftnetAllow != nil || netSoftnetBlock != nil || netSoftnetExpose != nil || netSoftnetControlFd != nil {
       netSoftnet = true
     }
 

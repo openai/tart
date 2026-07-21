@@ -139,18 +139,16 @@ final class SoftnetControlFDTests: XCTestCase {
     XCTAssertEqual(command.netSoftnetControlFd, 3)
   }
 
-  func testControlFDWorksWithHostNetworking() throws {
+  func testControlFDIsRejectedWithHostNetworking() throws {
     let temporaryHome = try createTemporaryTartHome()
     defer { try? FileManager.default.removeItem(at: temporaryHome) }
     let previousHome = ProcessInfo.processInfo.environment["TART_HOME"]
     setenv("TART_HOME", temporaryHome.path, 1)
     defer { restoreEnvironment("TART_HOME", value: previousHome) }
 
-    let command = try Run.parse(["vm", "--net-host", "--net-softnet-control-fd", "3"])
-
-    XCTAssertTrue(command.netHost)
-    XCTAssertFalse(command.netSoftnet)
-    XCTAssertEqual(command.netSoftnetControlFd, 3)
+    XCTAssertThrowsError(
+      try Run.parse(["vm", "--net-host", "--net-softnet-control-fd", "3"])
+    )
   }
 
   private func createTemporaryTartHome() throws -> URL {
