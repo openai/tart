@@ -110,7 +110,7 @@ struct TokenResponse: Decodable, Authentication {
   }
 }
 
-class Registry {
+class Registry: BlobStorage {
   private let baseURL: URL
   let namespace: String
   let credentialsProviders: [CredentialsProvider]
