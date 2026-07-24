@@ -8,8 +8,8 @@ extension URL {
   }
 
   func updateAccessDate(_ accessDate: Date = Date()) throws {
-    let attrs = try resourceValues(forKeys: [.contentAccessDateKey])
-    let modificationDate = attrs.contentAccessDate!
+    let attrs = try resourceValues(forKeys: [.contentModificationDateKey])
+    let modificationDate = attrs.contentModificationDate!
 
     let times = [accessDate.asTimeval(), modificationDate.asTimeval()]
     let ret = utimes(path, times)
@@ -23,6 +23,9 @@ extension URL {
 
 extension Date {
   func asTimeval() -> timeval {
-    timeval(tv_sec: Int(timeIntervalSince1970), tv_usec: 0)
+    let seconds = floor(timeIntervalSince1970)
+    let microseconds = (timeIntervalSince1970 - seconds) * 1_000_000
+
+    return timeval(tv_sec: Int(seconds), tv_usec: Int32(microseconds))
   }
 }
