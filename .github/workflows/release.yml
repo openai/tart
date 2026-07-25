@@ -13,7 +13,7 @@ jobs:
   release:
     if: github.event_name == 'push' && github.repository == 'openai/tart'
     name: Release
-    runs-on: macos-26
+    runs-on: xcode-27
     environment: publish
     timeout-minutes: 90
     permissions:
@@ -85,7 +85,7 @@ jobs:
   snapshot:
     if: github.event_name == 'workflow_dispatch'
     name: Release (Dry Run)
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 90
     permissions:
       contents: read
