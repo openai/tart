@@ -95,9 +95,11 @@ extension VMDisplayConfig: ExpressibleByArgument {
     var ppi: Int? = nil
 
     // Optional "@PPI" pixels-per-inch hint, e.g. "3200x1800px@220". Parsed
-    // before the unit suffix since it always trails the whole spec.
+    // before the unit suffix since it always trails the whole spec. Only a
+    // positive value is kept; zero/negative (or non-numeric) is ignored so the
+    // display falls back to the 72 default rather than a broken configuration.
     if let atIndex = argument.lastIndex(of: "@") {
-      ppi = Int(argument[argument.index(after: atIndex)...])
+      ppi = Int(argument[argument.index(after: atIndex)...]).flatMap { $0 > 0 ? $0 : nil }
       argument = String(argument[..<atIndex])
     }
 

@@ -57,4 +57,19 @@ final class VMConfigTests: XCTestCase {
     XCTAssertEqual(VMDisplayConfig(width: 3200, height: 1800, unit: .pixel, ppi: nil), config)
     XCTAssertEqual(72, config.effectivePixelsPerInch)
   }
+
+  func testRejectsNonPositivePixelsPerInchWhenParsing() throws {
+    // A zero or negative PPI is meaningless and must not persist — it would
+    // otherwise reach VZMacGraphicsDisplayConfiguration and fail to build the
+    // display instead of falling back to the 72 default.
+    XCTAssertNil(VMDisplayConfig(argument: "3200x1800px@0").ppi)
+    XCTAssertNil(VMDisplayConfig(argument: "3200x1800px@-5").ppi)
+  }
+
+  func testEffectivePixelsPerInchIgnoresNonPositiveStoredValue() throws {
+    // Defense for a hand-edited config.json: a stored value <= 0 falls back to
+    // 72 rather than being handed to VZMacGraphicsDisplayConfiguration.
+    XCTAssertEqual(72, VMDisplayConfig(width: 100, height: 100, unit: .pixel, ppi: 0).effectivePixelsPerInch)
+    XCTAssertEqual(72, VMDisplayConfig(width: 100, height: 100, unit: .pixel, ppi: -5).effectivePixelsPerInch)
+  }
 }
