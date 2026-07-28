@@ -285,7 +285,9 @@ struct Run: AsyncParsableCommand {
   var rootDiskOpts: String = ""
 
   #if arch(arm64)
-    @Flag(help: ArgumentHelp("Disables audio and entropy devices and switches to only Mac-specific input devices.", discussion: "Useful for running a VM that can be suspended via \"tart suspend\"."))
+    @Flag(
+      help: ArgumentHelp("Disables or replaces devices that do not support VM suspension, such as audio, entropy and some input devices.",
+                         discussion: "Useful for running a VM that can be suspended via \"tart suspend\"."))
   #endif
   var suspendable: Bool = false
 
@@ -374,7 +376,11 @@ struct Run: AsyncParsableCommand {
     if suspendable {
       let config = try VMConfig.init(fromURL: vmDir.configURL)
       if !(config.platform is PlatformSuspendable) {
-        throw ValidationError("You can only suspend macOS VMs")
+        throw ValidationError("This platform is not suspendable")
+      }
+
+      if let linux = config.platform as? Linux, linux.machineIdentifier == nil {
+        throw ValidationError("Linux VMs without a machine identifier cannot be suspended or resumed")
       }
 
       if noTrackpad {
@@ -421,14 +427,15 @@ struct Run: AsyncParsableCommand {
     let localStorage = try VMStorageLocal()
     let vmDir = try localStorage.open(name)
 
+    let storageLock = try FileLock(lockURL: Config().tartHomeDir)
+    try storageLock.lock()
+
     // Validate disk format support
     let vmConfig = try VMConfig(fromURL: vmDir.configURL)
     if !vmConfig.diskFormat.isSupported {
       throw ValidationError("Disk format '\(vmConfig.diskFormat.rawValue)' is not supported on this system.")
     }
 
-    let storageLock = try FileLock(lockURL: Config().tartHomeDir)
-    try storageLock.lock()
     // check if there is a running VM with the same MAC address
     let hasRunningMACCollision = try localStorage.list().contains {
       // check if there is a running VM with the same MAC but different name
@@ -438,6 +445,23 @@ struct Run: AsyncParsableCommand {
       print("There is already a running VM with the same MAC address!")
       print("Resetting VM to assign a new MAC address...")
       try vmDir.regenerateMACAddress()
+    }
+
+    // check if there is a running VM with the same Linux machine identifier but different name
+    if let linuxMachineIdentifier = (vmConfig.platform as? Linux)?.machineIdentifier {
+      let hasRunningLinuxMachineIdentifierCollision = try localStorage.list().contains {
+        if try !$1.running() || $1.name == vmDir.name {
+          return false
+        }
+        let otherConfig = try VMConfig(fromURL: $1.configURL)
+        return (otherConfig.platform as? Linux)?.machineIdentifier == linuxMachineIdentifier
+      }
+
+      if hasRunningLinuxMachineIdentifierCollision {
+        print("There is already a running VM with the same Linux machine identifier!")
+        print("Resetting VM to assign a new Linux machine identifier...")
+        try vmDir.regenerateLinuxMachineIdentifier()
+      }
     }
 
     if netSoftnet && isInteractiveSession() {

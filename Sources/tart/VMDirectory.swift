@@ -230,6 +230,21 @@ struct VMDirectory: Prunable {
     try vmConfig.save(toURL: configURL)
   }
 
+  func regenerateLinuxMachineIdentifier() throws {
+    var vmConfig = try VMConfig(fromURL: configURL)
+    guard var vmLinux = vmConfig.platform as? Linux else {
+      throw RuntimeError.VMConfigurationError("cannot regenerate a Linux machine identifier on a non-Linux VM")
+    }
+
+    vmLinux.machineIdentifier = VZGenericMachineIdentifier()
+    vmConfig.platform = vmLinux
+
+    // cleanup state if any
+    try? FileManager.default.removeItem(at: stateURL)
+
+    try vmConfig.save(toURL: configURL)
+  }
+
   func resizeDisk(
     _ sizeGB: UInt16,
     format: DiskImageFormat = .raw,

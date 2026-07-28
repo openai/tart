@@ -30,6 +30,9 @@ enum CodingKeys: String, CodingKey {
   // macOS-specific keys
   case ecid
   case hardwareModel
+
+  // Linux-specific keys
+  case machineIdentifier
 }
 
 struct VMDisplayConfig: Codable, Equatable {

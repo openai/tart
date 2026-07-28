@@ -106,6 +106,8 @@ struct Clone: AsyncParsableCommand {
       try rejectExistingDestination(localStorage)
 
       let sourceState = try sourceVM.state()
+      let sourceConfig = try VMConfig(fromURL: sourceVM.configURL)
+
       let generateMAC = try localStorage.hasVMsWithMACAddress(macAddress: sourceVM.macAddress())
         && sourceState != .Suspended
 
@@ -126,6 +128,10 @@ struct Clone: AsyncParsableCommand {
         try sourceVM.cloneStacked(to: tmpVMDir, copyWritableOverlay: true, generateMAC: generateMAC)
       } else {
         try sourceVM.clone(to: tmpVMDir, generateMAC: generateMAC)
+      }
+
+      if sourceState != .Suspended, sourceConfig.platform is Linux {
+        try tmpVMDir.regenerateLinuxMachineIdentifier()
       }
 
       try localStorage.move(newName, from: tmpVMDir)
