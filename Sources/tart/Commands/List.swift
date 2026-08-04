@@ -5,8 +5,8 @@ import SwiftUI
 fileprivate struct VMInfo: Encodable {
   let Source: String
   let Name: String
-  let Disk: Int
-  let Size: Int
+  let Disk: HumanReadableByteCount
+  let Size: HumanReadableByteCount
   let Accessed: String
   let Running: Bool
   let State: String
@@ -42,8 +42,8 @@ struct List: AsyncParsableCommand {
         try VMInfo(
           Source: "local",
           Name: name,
-          Disk: vmDir.sizeGB(),
-          Size: vmDir.allocatedSizeGB(),
+          Disk: HumanReadableByteCount(try vmDir.sizeBytes()) { $0 / 1000 / 1000 / 1000 },
+          Size: HumanReadableByteCount(try vmDir.allocatedSizeBytes()) { $0 / 1000 / 1000 / 1000 },
           Accessed: formatAccessDate(try vmDir.accessDate()),
           Running: vmDir.running(),
           State: vmDir.state().rawValue
@@ -56,8 +56,8 @@ struct List: AsyncParsableCommand {
         try VMInfo(
           Source: "OCI",
           Name: name,
-          Disk: vmDir.sizeGB(),
-          Size: vmDir.allocatedSizeGB(),
+          Disk: HumanReadableByteCount(try vmDir.sizeBytes()) { $0 / 1000 / 1000 / 1000 },
+          Size: HumanReadableByteCount(try vmDir.allocatedSizeBytes()) { $0 / 1000 / 1000 / 1000 },
           Accessed: formatAccessDate(try vmDir.accessDate()),
           Running: vmDir.running(),
           State: vmDir.state().rawValue
