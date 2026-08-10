@@ -45,6 +45,13 @@ import XCTest
       _ = try fixture.disk.makeAttachment()
     }
 
+    func testAttachesStackReadOnly() throws {
+      let fixture = try Fixture(baseFormat: .raw)
+      try fixture.disk.createWritableOverlay()
+
+      _ = try fixture.disk.makeAttachment(readOnly: true)
+    }
+
     func testRejectsMissingWritableOverlayWhenAttaching() throws {
       let fixture = try Fixture(baseFormat: .raw)
 
@@ -74,49 +81,15 @@ import XCTest
       }
     }
 
-    func testRejectsWrongContentDigest() throws {
-      let fixture = try Fixture(baseFormat: .raw)
-      fixture.disk = DiskImageStack(
-        base: DiskImageFile(url: fixture.disk.base.url, contentDigest: "sha256:wrong"),
-        baseFormat: fixture.disk.baseFormat,
-        overlays: fixture.disk.overlays,
-        writableOverlayURL: fixture.disk.writableOverlayURL,
-        blockSize: fixture.disk.blockSize,
-        blockCount: fixture.disk.blockCount
-      )
-
-      assertThrows(.invalidDiskImage(fixture.disk.base.url, "disk image content digest does not match")) {
-        try fixture.disk.createWritableOverlay()
-      }
-    }
-
-    func testRejectsWrongOverlayContentDigest() throws {
-      let fixture = try Fixture(baseFormat: .asif, publishedOverlayCount: 1)
-      fixture.disk = DiskImageStack(
-        base: fixture.disk.base,
-        baseFormat: fixture.disk.baseFormat,
-        overlays: [
-          DiskImageFile(url: fixture.disk.overlays[0].url, contentDigest: "sha256:wrong"),
-        ],
-        writableOverlayURL: fixture.disk.writableOverlayURL,
-        blockSize: fixture.disk.blockSize,
-        blockCount: fixture.disk.blockCount
-      )
-
-      assertThrows(.invalidDiskImage(fixture.disk.overlays[0].url, "disk image content digest does not match")) {
-        try fixture.disk.createWritableOverlay()
-      }
-    }
-
     func testRejectsNonASIFPublishedOverlay() throws {
       let fixture = try Fixture(baseFormat: .raw)
       let overlayURL = fixture.directory.appendingPathComponent("published-raw.img")
       _ = try DiskImage(creating: .raw(url: overlayURL, blockCount: 8))
       fixture.disk = DiskImageStack(
-        base: fixture.disk.base,
+        baseURL: fixture.disk.baseURL,
         baseFormat: fixture.disk.baseFormat,
-        overlays: [
-          DiskImageFile(url: overlayURL, contentDigest: try Digest.hash(overlayURL)),
+        immutableOverlayURLs: [
+          overlayURL,
         ],
         writableOverlayURL: fixture.disk.writableOverlayURL,
         blockSize: fixture.disk.blockSize,
@@ -131,15 +104,15 @@ import XCTest
     func testRejectsWrongBaseFormat() throws {
       let fixture = try Fixture(baseFormat: .raw)
       fixture.disk = DiskImageStack(
-        base: fixture.disk.base,
+        baseURL: fixture.disk.baseURL,
         baseFormat: .asif,
-        overlays: fixture.disk.overlays,
+        immutableOverlayURLs: fixture.disk.immutableOverlayURLs,
         writableOverlayURL: fixture.disk.writableOverlayURL,
         blockSize: fixture.disk.blockSize,
         blockCount: fixture.disk.blockCount
       )
 
-      assertThrows(.invalidDiskImage(fixture.disk.base.url, "base disk format does not match")) {
+      assertThrows(.invalidDiskImage(fixture.disk.baseURL, "base disk format does not match")) {
         try fixture.disk.createWritableOverlay()
       }
     }
@@ -147,15 +120,15 @@ import XCTest
     func testRejectsBlockSizeMismatch() throws {
       let fixture = try Fixture(baseFormat: .raw)
       fixture.disk = DiskImageStack(
-        base: fixture.disk.base,
+        baseURL: fixture.disk.baseURL,
         baseFormat: fixture.disk.baseFormat,
-        overlays: fixture.disk.overlays,
+        immutableOverlayURLs: fixture.disk.immutableOverlayURLs,
         writableOverlayURL: fixture.disk.writableOverlayURL,
         blockSize: 4096,
         blockCount: fixture.disk.blockCount
       )
 
-      assertThrows(.invalidGeometry("immutable disk stack does not match manifest block size")) {
+      assertThrows(.invalidBlockLayout("immutable disk stack does not match manifest block size")) {
         try fixture.disk.createWritableOverlay()
       }
     }
@@ -163,15 +136,15 @@ import XCTest
     func testRejectsUnsupportedBlockSize() throws {
       let fixture = try Fixture(baseFormat: .raw)
       fixture.disk = DiskImageStack(
-        base: fixture.disk.base,
+        baseURL: fixture.disk.baseURL,
         baseFormat: fixture.disk.baseFormat,
-        overlays: fixture.disk.overlays,
+        immutableOverlayURLs: fixture.disk.immutableOverlayURLs,
         writableOverlayURL: fixture.disk.writableOverlayURL,
         blockSize: 123,
         blockCount: fixture.disk.blockCount
       )
 
-      assertThrows(.invalidGeometry("unsupported stacked disk block size 123")) {
+      assertThrows(.invalidBlockLayout("unsupported stacked disk block size 123")) {
         try fixture.disk.createWritableOverlay()
       }
     }
@@ -179,15 +152,15 @@ import XCTest
     func testRejectsManifestBlockCountMismatch() throws {
       let fixture = try Fixture(baseFormat: .raw)
       fixture.disk = DiskImageStack(
-        base: fixture.disk.base,
+        baseURL: fixture.disk.baseURL,
         baseFormat: fixture.disk.baseFormat,
-        overlays: fixture.disk.overlays,
+        immutableOverlayURLs: fixture.disk.immutableOverlayURLs,
         writableOverlayURL: fixture.disk.writableOverlayURL,
         blockSize: fixture.disk.blockSize,
         blockCount: fixture.disk.blockCount + 1
       )
 
-      assertThrows(.invalidGeometry("immutable disk stack does not match manifest block count")) {
+      assertThrows(.invalidBlockLayout("immutable disk stack does not match manifest block count")) {
         try fixture.disk.createWritableOverlay()
       }
     }
@@ -199,9 +172,9 @@ import XCTest
       let copiedURL = fixture.directory.appendingPathComponent("copied-overlay.asif")
       try fixture.disk.copyWritableOverlay(to: copiedURL)
       fixture.disk = DiskImageStack(
-        base: fixture.disk.base,
+        baseURL: fixture.disk.baseURL,
         baseFormat: fixture.disk.baseFormat,
-        overlays: fixture.disk.overlays,
+        immutableOverlayURLs: fixture.disk.immutableOverlayURLs,
         writableOverlayURL: copiedURL,
         blockSize: fixture.disk.blockSize,
         blockCount: fixture.disk.blockCount
@@ -216,15 +189,15 @@ import XCTest
       let fixture = try Fixture(baseFormat: .asif)
       let other = try Fixture(baseFormat: .asif, publishedOverlayCount: 1)
       fixture.disk = DiskImageStack(
-        base: fixture.disk.base,
+        baseURL: fixture.disk.baseURL,
         baseFormat: fixture.disk.baseFormat,
-        overlays: other.disk.overlays,
+        immutableOverlayURLs: other.disk.immutableOverlayURLs,
         writableOverlayURL: fixture.disk.writableOverlayURL,
         blockSize: fixture.disk.blockSize,
         blockCount: fixture.disk.blockCount
       )
 
-      assertThrows(.invalidDiskImage(other.disk.overlays[0].url, "ASIF overlay is incompatible with its parent")) {
+      assertThrows(.invalidDiskImage(other.disk.immutableOverlayURLs[0], "ASIF overlay is incompatible with its parent")) {
         try fixture.disk.createWritableOverlay()
       }
     }
@@ -263,19 +236,19 @@ import XCTest
           _ = try DiskImage(creating: .asif(url: baseURL, blockCount: 8, blockSize: .bytes512))
         }
 
-        var overlays: [DiskImageFile] = []
+        var immutableOverlayURLs: [URL] = []
         var image = try DiskImage(opening: .open(url: baseURL, mode: .readOnly))
         for index in 0..<publishedOverlayCount {
           let overlayURL = directory.appendingPathComponent("published-\(index).asif")
           let stack = try image.appending(.asifLayer(url: overlayURL, type: .overlay))
-          overlays.append(DiskImageFile(url: overlayURL, contentDigest: try Digest.hash(overlayURL)))
+          immutableOverlayURLs.append(overlayURL)
           image = stack
         }
 
         disk = DiskImageStack(
-          base: DiskImageFile(url: baseURL, contentDigest: try Digest.hash(baseURL)),
+          baseURL: baseURL,
           baseFormat: baseFormat,
-          overlays: overlays,
+          immutableOverlayURLs: immutableOverlayURLs,
           writableOverlayURL: directory.appendingPathComponent("overlay.asif"),
           blockSize: 512,
           blockCount: 8

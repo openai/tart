@@ -31,6 +31,9 @@ struct Clone: AsyncParsableCommand {
   @Flag(help: .hidden)
   var deduplicate: Bool = false
 
+  @Flag(help: "create a stacked disk that uses the source image as an immutable base")
+  var base: Bool = false
+
   @Option(help: ArgumentHelp("limit automatic pruning to n gigabytes", valueName: "n"))
   var pruneLimit: UInt = 100
 
@@ -47,8 +50,15 @@ struct Clone: AsyncParsableCommand {
   func run() async throws {
     let ociStorage = try VMStorageOCI()
     let localStorage = try VMStorageLocal()
+    let remoteName = try? RemoteName(sourceName)
 
-    if let remoteName = try? RemoteName(sourceName), !ociStorage.exists(remoteName) {
+    if base {
+      guard remoteName != nil else {
+        throw ValidationError("--base requires a remote image")
+      }
+    }
+
+    if let remoteName, try !ociStorage.hasUsableCachedImageForClone(remoteName, requireManifest: base) {
       // Pull the VM in case it's OCI-based and doesn't exist locally yet
       let registry = try Registry(host: remoteName.host, namespace: remoteName.namespace, insecure: insecure)
       try await ociStorage.pull(remoteName, registry: registry, concurrency: concurrency, deduplicate: deduplicate)
@@ -66,9 +76,28 @@ struct Clone: AsyncParsableCommand {
       let lock = try FileLock(lockURL: Config().tartHomeDir)
       try lock.lock()
 
+      let sourceState = try sourceVM.state()
       let generateMAC = try localStorage.hasVMsWithMACAddress(macAddress: sourceVM.macAddress())
-        && sourceVM.state() != .Suspended
-      try sourceVM.clone(to: tmpVMDir, generateMAC: generateMAC)
+        && sourceState != .Suspended
+
+      if base {
+        guard sourceVM.isStandalone else {
+          throw ValidationError("--base cannot use an image that already has a stacked disk")
+        }
+        guard try VMConfig(fromURL: sourceVM.configURL).os == .darwin else {
+          throw ValidationError("--base currently supports only macOS images")
+        }
+        try sourceVM.cloneAsStackedBase(to: tmpVMDir, generateMAC: generateMAC)
+      } else if sourceVM.isStackedCachedImage {
+        try sourceVM.cloneStacked(to: tmpVMDir, copyWritableOverlay: false, generateMAC: generateMAC)
+      } else if sourceVM.isStackedVM {
+        guard sourceState == .Stopped else {
+          throw RuntimeError.VMConfigurationError("VM \"\(sourceName)\" must be stopped before cloning")
+        }
+        try sourceVM.cloneStacked(to: tmpVMDir, copyWritableOverlay: true, generateMAC: generateMAC)
+      } else {
+        try sourceVM.clone(to: tmpVMDir, generateMAC: generateMAC)
+      }
 
       try localStorage.move(newName, from: tmpVMDir)
 
@@ -78,11 +107,23 @@ struct Clone: AsyncParsableCommand {
       // is not actually claiming new space until the VM is started and it writes something to disk.
       //
       // So, once we clone the VM let's try to claim the rest of space for the VM to run without errors.
-      let unallocatedBytes = try sourceVM.sizeBytes() - sourceVM.allocatedSizeBytes()
-      // Avoid reclaiming an excessive amount of disk space.
-      let reclaimBytes = min(unallocatedBytes, Int(pruneLimit) * 1024 * 1024 * 1024)
-      if reclaimBytes > 0 {
-        try Prune.reclaimIfNeeded(UInt64(reclaimBytes), sourceVM)
+      if sourceVM.isStandalone {
+        let unallocatedBytes = try sourceVM.sizeBytes() - sourceVM.allocatedSizeBytes()
+        // Avoid reclaiming an excessive amount of disk space.
+        let reclaimBytes = min(unallocatedBytes, Int(pruneLimit) * 1024 * 1024 * 1024)
+        if reclaimBytes > 0 {
+          try Prune.reclaimIfNeeded(UInt64(reclaimBytes), sourceVM)
+        }
+      } else if sourceVM.isStackedVM || sourceVM.isStackedCachedImage {
+        let clonedVM = try localStorage.open(newName)
+        // A stacked clone owns only its writable overlay locally, but that
+        // overlay may grow to the full guest-visible disk block layout at
+        // runtime. Reclaim against the clone so it is not pruned itself.
+        let unallocatedBytes = try clonedVM.diskSizeBytes() - clonedVM.allocatedSizeBytes()
+        let reclaimBytes = min(unallocatedBytes, Int(pruneLimit) * 1024 * 1024 * 1024)
+        if reclaimBytes > 0 {
+          try Prune.reclaimIfNeeded(UInt64(reclaimBytes), clonedVM)
+        }
       }
     }, onCancel: {
       try? FileManager.default.removeItem(at: tmpVMDir.baseURL)

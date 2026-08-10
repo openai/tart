@@ -64,7 +64,12 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
 
     // Initialize the virtual machine and its configuration
     self.network = network
-    configuration = try Self.craftConfiguration(diskURL: vmDir.diskURL,
+    let disk: any DiskAttachmentSource = if vmDir.isStackedVM {
+      try vmDir.diskImageStack()
+    } else {
+      DiskImageAttachment(url: vmDir.diskURL)
+    }
+    configuration = try Self.craftConfiguration(disk: disk,
                                                 nvramURL: vmDir.nvramURL, vmConfig: config,
                                                 network: network, additionalStorageDevices: additionalStorageDevices,
                                                 directorySharingDevices: directorySharingDevices,
@@ -196,7 +201,8 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
 
       // Initialize the virtual machine and its configuration
       self.network = network
-      configuration = try Self.craftConfiguration(diskURL: vmDir.diskURL, nvramURL: vmDir.nvramURL,
+      configuration = try Self.craftConfiguration(disk: DiskImageAttachment(url: vmDir.diskURL),
+                                                  nvramURL: vmDir.nvramURL,
                                                   vmConfig: config, network: network,
                                                   additionalStorageDevices: additionalStorageDevices,
                                                   directorySharingDevices: directorySharingDevices,
@@ -312,7 +318,7 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
   }
 
   static func craftConfiguration(
-    diskURL: URL,
+    disk: any DiskAttachmentSource,
     nvramURL: URL,
     vmConfig: VMConfig,
     network: Network = NetworkShared(),
@@ -404,12 +410,11 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
     }
 
     // Storage
-    let attachment = try VZDiskImageStorageDeviceAttachment(
-      url: diskURL,
+    // When not specified, use "cached" caching mode for Linux VMs to prevent file-system corruption[1]
+    //
+    // [1]: https://github.com/cirruslabs/tart/pull/675
+    let attachment = try disk.makeAttachment(
       readOnly: false,
-      // When not specified, use "cached" caching mode for Linux VMs to prevent file-system corruption[1]
-      //
-      // [1]: https://github.com/cirruslabs/tart/pull/675
       cachingMode: caching ?? (vmConfig.os == .linux ? .cached : .automatic),
       synchronizationMode: sync
     )

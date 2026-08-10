@@ -31,7 +31,7 @@ struct Get: AsyncParsableCommand {
       OS: vmConfig.os,
       CPU: vmConfig.cpuCount,
       Memory: memorySizeInMb,
-      Disk: HumanReadableByteCount(try vmDir.sizeBytes()) { $0 / 1000 / 1000 / 1000 },
+      Disk: HumanReadableByteCount(try vmDir.diskSizeBytes()) { $0 / 1000 / 1000 / 1000 },
       DiskFormat: vmConfig.diskFormat.rawValue,
       Size: HumanReadableByteCount(try vmDir.allocatedSizeBytes()) {
         String(format: "%.3f", Float($0) / 1000 / 1000 / 1000)
@@ -40,7 +40,6 @@ struct Get: AsyncParsableCommand {
       Running: try vmDir.running(),
       State: try vmDir.state().rawValue
     )
-
     print(format.renderSingle(info))
   }
 }

@@ -42,7 +42,7 @@ struct List: AsyncParsableCommand {
         try VMInfo(
           Source: "local",
           Name: name,
-          Disk: HumanReadableByteCount(try vmDir.sizeBytes()) { $0 / 1000 / 1000 / 1000 },
+          Disk: HumanReadableByteCount(try vmDir.diskSizeBytes()) { $0 / 1000 / 1000 / 1000 },
           Size: HumanReadableByteCount(try vmDir.allocatedSizeBytes()) { $0 / 1000 / 1000 / 1000 },
           Accessed: formatAccessDate(try vmDir.accessDate()),
           Running: vmDir.running(),
@@ -56,7 +56,7 @@ struct List: AsyncParsableCommand {
         try VMInfo(
           Source: "OCI",
           Name: name,
-          Disk: HumanReadableByteCount(try vmDir.sizeBytes()) { $0 / 1000 / 1000 / 1000 },
+          Disk: HumanReadableByteCount(try vmDir.diskSizeBytes()) { $0 / 1000 / 1000 / 1000 },
           Size: HumanReadableByteCount(try vmDir.allocatedSizeBytes()) { $0 / 1000 / 1000 / 1000 },
           Accessed: formatAccessDate(try vmDir.accessDate()),
           Running: vmDir.running(),

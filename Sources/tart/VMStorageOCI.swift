@@ -18,7 +18,98 @@ class VMStorageOCI: PrunableStorage {
   }
 
   func exists(_ name: RemoteName) -> Bool {
-    VMDirectory(baseURL: vmURL(name)).initialized
+    VMDirectory(baseURL: vmURL(name)).isCachedImage
+  }
+
+  /// Whether clone can use a cached image without pulling. Standalone images keep
+  /// Tart's existing structural check. Stacked cached images cheaply require every
+  /// immutable file with its expected length; explicit pull remains the path
+  /// that hashes content and repairs same-sized corruption.
+  func hasUsableCachedImageForClone(_ name: RemoteName, requireManifest: Bool = false) throws -> Bool {
+    guard exists(name) else {
+      return false
+    }
+
+    let vmDir = VMDirectory(baseURL: vmURL(name))
+    if requireManifest && !FileManager.default.fileExists(atPath: vmDir.manifestURL.path) {
+      return false
+    }
+    guard vmDir.isStackedCachedImage else {
+      return true
+    }
+
+    let manifest = try OCIManifest(fromJSON: Data(contentsOf: vmDir.manifestURL))
+    guard case .stacked(let base, let overlays) = try manifest.tartDiskRepresentation() else {
+      return true
+    }
+
+    let contentStore = try ContentStore()
+    for group in [base] + overlays {
+      guard let contentDigest = group.contentDigest,
+            let contentURL = try contentStore.contentURLIfPresent(for: contentDigest) else {
+        return false
+      }
+
+      var expectedSize: UInt64 = 0
+      for chunk in group.chunks {
+        guard let uncompressedSize = chunk.uncompressedSize() else {
+          return false
+        }
+        let addition = expectedSize.addingReportingOverflow(uncompressedSize)
+        guard !addition.overflow else {
+          return false
+        }
+        expectedSize = addition.partialValue
+      }
+
+      guard let actualSize = UInt64(exactly: try contentURL.sizeBytes()),
+            actualSize == expectedSize else {
+        return false
+      }
+    }
+
+    return true
+  }
+
+  /// Whether a cached image is complete enough for `pull` to return without
+  /// repairing it. Standalone images keep Tart's existing structural cache-hit
+  /// behavior; stacked cached images additionally need every immutable disk file in
+  /// the shared content store.
+  func hasCompleteCachedImage(_ name: RemoteName, manifest: OCIManifest) throws -> Bool {
+    guard exists(name) else {
+      return false
+    }
+
+    guard let missingGroups = try missingStackedDiskFileGroups(for: manifest) else {
+      return true
+    }
+
+    return missingGroups.isEmpty
+  }
+
+  /// Bytes that this pull may need to materialize locally. For stacked images
+  /// this is the sum of only the missing complete disk files, not the final
+  /// guest-visible disk block layout.
+  func requiredDiskStorageBytes(for manifest: OCIManifest) throws -> UInt64? {
+    guard let missingGroups = try missingStackedDiskFileGroups(for: manifest) else {
+      return manifest.uncompressedDiskSize()
+    }
+
+    var total: UInt64 = 0
+    for group in missingGroups {
+      for chunk in group.chunks {
+        guard let uncompressedSize = chunk.uncompressedSize() else {
+          throw OCIManifestValidationError.invalidDiskMetadata("disk chunks need uncompressed size and content digest")
+        }
+        let addition = total.addingReportingOverflow(uncompressedSize)
+        guard !addition.overflow else {
+          throw RuntimeError.PullFailed("stacked disk storage size overflows UInt64")
+        }
+        total = addition.partialValue
+      }
+    }
+
+    return total
   }
 
   func digest(_ name: RemoteName) throws -> String {
@@ -34,7 +125,7 @@ class VMStorageOCI: PrunableStorage {
   func open(_ name: RemoteName, _ accessDate: Date = Date()) throws -> VMDirectory {
     let vmDir = VMDirectory(baseURL: vmURL(name))
 
-    try vmDir.validate(userFriendlyName: name.description)
+    try vmDir.validateCachedImage(userFriendlyName: name.description)
 
     try vmDir.baseURL.updateAccessDate(accessDate)
 
@@ -44,9 +135,53 @@ class VMStorageOCI: PrunableStorage {
   func create(_ name: RemoteName, overwrite: Bool = false) throws -> VMDirectory {
     let vmDir = VMDirectory(baseURL: vmURL(name))
 
+    if !overwrite && vmDir.isCachedImage {
+      throw RuntimeError.VMDirectoryAlreadyInitialized("VM directory is already initialized, preventing overwrite")
+    }
+
     try vmDir.initialize(overwrite: overwrite)
 
     return vmDir
+  }
+
+  /// Materialize the digest-addressed cached image for an image Tart just
+  /// pushed, without routing its own local data back through the registry.
+  func populate(_ name: RemoteName, from source: VMDirectory, manifest: OCIManifest) throws {
+    if try hasCompleteCachedImage(name, manifest: manifest) {
+      return
+    }
+
+    let vmDir = try create(name, overwrite: exists(name))
+
+    if source.isStackedVM {
+      guard case .stacked(_, let overlays) = try manifest.tartDiskRepresentation(),
+            let contentDigest = overlays.last?.contentDigest else {
+        throw RuntimeError.VMConfigurationError("pushed image is missing its writable ASIF overlay")
+      }
+
+      // The pushed top overlay becomes immutable in the cached image. Keep a
+      // semantic copy so later clones do not need to fetch it back.
+      let contentStore = try ContentStore()
+      if try contentStore.existingContentURL(for: contentDigest) == nil {
+        let temporaryURL = try contentStore.temporaryContentURL(for: contentDigest)
+        do {
+          try FileManager.default.copyItem(at: source.overlayURL, to: temporaryURL)
+          _ = try contentStore.install(temporaryURL, contentDigest: contentDigest)
+        } catch {
+          try? FileManager.default.removeItem(at: temporaryURL)
+          throw error
+        }
+      }
+
+      try FileManager.default.copyItem(at: source.configURL, to: vmDir.configURL)
+      try FileManager.default.copyItem(at: source.nvramURL, to: vmDir.nvramURL)
+    } else {
+      try source.clone(to: vmDir, generateMAC: false)
+    }
+
+    // Keep the exact manifest Tart submitted so tag links and later pushes
+    // refer to the same digest-addressed cached image.
+    try manifest.toJSON().write(to: vmDir.manifestURL)
   }
 
   func move(_ name: RemoteName, from: VMDirectory) throws{
@@ -84,7 +219,7 @@ class VMStorageOCI: PrunableStorage {
       }
 
       let vmDir = VMDirectory(baseURL: foundURL.resolvingSymlinksInPath())
-      if !vmDir.initialized {
+      if !vmDir.isCachedImage {
         continue
       }
 
@@ -113,7 +248,7 @@ class VMStorageOCI: PrunableStorage {
     for case let foundURL as URL in enumerator {
       let vmDir = VMDirectory(baseURL: foundURL)
 
-      if !vmDir.initialized {
+      if !vmDir.isCachedImage {
         continue
       }
 
@@ -141,7 +276,9 @@ class VMStorageOCI: PrunableStorage {
   }
 
   func prunables() throws -> [Prunable] {
-    try list().filter { (_, _, isSymlink) in !isSymlink }.map { (_, vmDir, _) in vmDir }
+    try list().filter { (_, vmDir, isSymlink) in
+      !isSymlink && vmDir.isStandalone
+    }.map { (_, vmDir, _) in vmDir }
   }
 
   func pull(_ name: RemoteName, registry: Registry, concurrency: UInt, deduplicate: Bool) async throws {
@@ -157,7 +294,8 @@ class VMStorageOCI: PrunableStorage {
     let digestName = RemoteName(host: name.host, namespace: name.namespace,
                                 reference: Reference(digest: Digest.hash(manifestData)))
 
-    if exists(name) && exists(digestName) && linked(from: name, to: digestName) {
+    let hasCompleteDigestImage = try hasCompleteCachedImage(digestName, manifest: manifest)
+    if exists(name) && hasCompleteDigestImage && linked(from: name, to: digestName) {
       // optimistically check if we need to do anything at all before locking
       defaultLogger.appendNewLine("\(digestName) image is already cached and linked!")
       return
@@ -181,11 +319,13 @@ class VMStorageOCI: PrunableStorage {
       throw CancellationError()
     }
 
-    if !exists(digestName) {
+    if try !hasCompleteCachedImage(digestName, manifest: manifest) {
       let span = OTel.shared.tracer.spanBuilder(spanName: "pull").setActive(true).startSpan()
       defer { span.end() }
 
       let tmpVMDir = try VMDirectory.temporaryDeterministic(key: name.description)
+      let digestVMDir = VMDirectory(baseURL: vmURL(digestName))
+      let preserveExplicitlyPulledMark = digestVMDir.isExplicitlyPulled()
 
       // Open an existing VM directory corresponding to this name, if any,
       // marking it as outdated to speed up the garbage collection process
@@ -196,21 +336,35 @@ class VMStorageOCI: PrunableStorage {
       try tmpVMDirLock.lock()
 
       // Try to reclaim some cache space if we know the VM size in advance
-      if let uncompressedDiskSize = manifest.uncompressedDiskSize() {
-        OpenTelemetry.instance.contextProvider.activeSpan?.setAttribute(
-          key: "oci.image-uncompressed-disk-size-bytes",
-          value: .int(Int(uncompressedDiskSize))
-        )
+      if let requiredDiskStorageBytes = try requiredDiskStorageBytes(for: manifest) {
+        if let telemetryValue = Int(exactly: requiredDiskStorageBytes) {
+          OpenTelemetry.instance.contextProvider.activeSpan?.setAttribute(
+            key: "oci.image-required-disk-storage-bytes",
+            value: .int(telemetryValue)
+          )
+        }
 
         let otherVMFilesSize: UInt64 = 128 * 1024 * 1024
+        let requiredStorage = requiredDiskStorageBytes.addingReportingOverflow(otherVMFilesSize)
+        guard !requiredStorage.overflow else {
+          throw RuntimeError.PullFailed("required pull storage size overflows UInt64")
+        }
 
-        try Prune.reclaimIfNeeded(uncompressedDiskSize + otherVMFilesSize)
+        try Prune.reclaimIfNeeded(requiredStorage.partialValue)
       }
 
       try await withTaskCancellationHandler(operation: {
         try await retry(maxAttempts: 5) {
-          // Choose the best base image which has the most deduplication ratio
-          let localLayerCache = try await chooseLocalLayerCache(name, manifest, registry)
+          // Existing standalone images can still reuse another complete local disk.
+          // Stacked images reconstruct their immutable files through the
+          // shared content store instead of materializing disk.img.
+          let localLayerCache: LocalLayerCache?
+          switch try manifest.tartDiskRepresentation() {
+          case .flat:
+            localLayerCache = try await chooseLocalLayerCache(name, manifest, registry)
+          case .stacked:
+            localLayerCache = nil
+          }
 
           if let llc = localLayerCache {
             let deduplicatedHuman = ByteCountFormatter.string(fromByteCount: Int64(llc.deduplicatedBytes), countStyle: .file)
@@ -232,6 +386,14 @@ class VMStorageOCI: PrunableStorage {
 
           return .throw
         }
+
+        // Preserve the exact manifest bytes received from the registry. Its
+        // digest identifies this cached image and stacked VMs pin it.
+        try manifestData.write(to: tmpVMDir.manifestURL)
+        if preserveExplicitlyPulledMark {
+          tmpVMDir.markExplicitlyPulled()
+        }
+
         try move(digestName, from: tmpVMDir)
       }, onCancel: {
         try? FileManager.default.removeItem(at: tmpVMDir.baseURL)
@@ -251,6 +413,28 @@ class VMStorageOCI: PrunableStorage {
 
     // to explicitly set the image as being accessed so it won't get pruned immediately
     _ = try VMStorageOCI().open(name)
+  }
+
+  /// Returns `nil` for standalone images and the missing immutable disk-file groups
+  /// for stacked images. `ContentStore.existingContentURL()` intentionally
+  /// validates the digest so corrupt entries are repaired by a normal pull.
+  private func missingStackedDiskFileGroups(for manifest: OCIManifest) throws -> [TartDiskFileGroup]? {
+    guard case .stacked(let base, let overlays) = try manifest.tartDiskRepresentation() else {
+      return nil
+    }
+
+    let contentStore = try ContentStore()
+    var missingGroups: [TartDiskFileGroup] = []
+    for group in [base] + overlays {
+      guard let contentDigest = group.contentDigest else {
+        throw OCIManifestValidationError.invalidDiskMetadata("stacked disk files need a whole-file content digest")
+      }
+      if try contentStore.existingContentURL(for: contentDigest) == nil {
+        missingGroups.append(group)
+      }
+    }
+
+    return missingGroups
   }
 
   func linked(from: RemoteName, to: RemoteName) -> Bool {
@@ -280,10 +464,16 @@ class VMStorageOCI: PrunableStorage {
     }
 
     // Load OCI VM images and their manifests (if present)
-    var candidates: [(name: String, vmDir: VMDirectory, manifest: OCIManifest, deduplicatedBytes: UInt64)] = []
+    var candidates: [(
+      name: String,
+      vmDir: VMDirectory,
+      manifest: OCIManifest,
+      manifestDigest: String,
+      deduplicatedBytes: UInt64
+    )] = []
 
     for (name, vmDir, isSymlink) in try list() {
-      if isSymlink {
+      if isSymlink || !vmDir.isStandalone {
         continue
       }
 
@@ -295,7 +485,13 @@ class VMStorageOCI: PrunableStorage {
         continue
       }
 
-      candidates.append((name, vmDir, manifest, calculateDeduplicatedBytes(manifest)))
+      candidates.append((
+        name,
+        vmDir,
+        manifest,
+        Digest.hash(manifestJSON),
+        calculateDeduplicatedBytes(manifest)
+      ))
     }
 
     // Previously we haven't stored the OCI VM image manifests, but still fetched the VM image manifest if
@@ -305,10 +501,17 @@ class VMStorageOCI: PrunableStorage {
     // with the registry if we haven't already retrieved the manifest for that OCI VM image.
     if name.reference.type == .Tag,
        let vmDir = try? open(name),
+       vmDir.isStandalone,
        let digest = try? digest(name),
-       try !candidates.contains(where: {try $0.manifest.digest() == digest}),
-       let (manifest, _) = try? await registry.pullManifest(reference: digest) {
-      candidates.append((name.description, vmDir, manifest, calculateDeduplicatedBytes(manifest)))
+       !candidates.contains(where: { $0.manifestDigest == digest }),
+       let (manifest, manifestData) = try? await registry.pullManifest(reference: digest) {
+      candidates.append((
+        name.description,
+        vmDir,
+        manifest,
+        Digest.hash(manifestData),
+        calculateDeduplicatedBytes(manifest)
+      ))
     }
 
     // Now, find the best match based on how many bytes we'll deduplicate

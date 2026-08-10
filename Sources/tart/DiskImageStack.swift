@@ -5,20 +5,17 @@ import Virtualization
   import DiskImageKit
 #endif
 
-/// One immutable complete disk file used by a stacked disk.
-///
-/// This is a reconstructed base disk or published ASIF overlay, not an OCI
-/// layer or an individual Tart disk chunk.
-struct DiskImageFile {
-  let url: URL
-  let contentDigest: String
+/// The logical block layout exposed by a disk image.
+struct DiskImageBlockLayout {
+  let blockSize: UInt64
+  let blockCount: UInt64
 }
 
 enum DiskImageStackError: Error, Equatable, CustomStringConvertible {
   case unavailable
   case writableOverlayAlreadyExists(URL)
   case writableOverlayMissing(URL)
-  case invalidGeometry(String)
+  case invalidBlockLayout(String)
   case invalidDiskImage(URL, String)
 
   var description: String {
@@ -29,7 +26,7 @@ enum DiskImageStackError: Error, Equatable, CustomStringConvertible {
       "writable overlay already exists: \(url.path)"
     case .writableOverlayMissing(let url):
       "writable overlay is missing: \(url.path)"
-    case .invalidGeometry(let reason):
+    case .invalidBlockLayout(let reason):
       reason
     case .invalidDiskImage(let url, let reason):
       "\(reason): \(url.path)"
@@ -37,16 +34,66 @@ enum DiskImageStackError: Error, Equatable, CustomStringConvertible {
   }
 }
 
-struct DiskImageStack {
-  /// DiskImageKit-ready paths and geometry after Tart disk chunks have been
+struct DiskImageStack: DiskAttachmentSource {
+  /// DiskImageKit-ready paths and block layout after Tart disk chunks have been
   /// reconstructed into complete immutable files. The writable overlay stays
   /// private to one VM.
-  let base: DiskImageFile
+  let baseURL: URL
   let baseFormat: DiskImageFormat
-  let overlays: [DiskImageFile]
+  let immutableOverlayURLs: [URL]
   let writableOverlayURL: URL
   let blockSize: UInt64
   let blockCount: UInt64
+
+  /// Reads a disk image's current block layout without resolving or validating a
+  /// whole stack. This is used for the VM's private writable overlay, whose
+  /// size may be newer than the pinned immutable parent manifest.
+  static func diskImageBlockLayout(at url: URL) throws -> DiskImageBlockLayout {
+    #if canImport(DiskImageKit)
+      if #available(macOS 27.0, *) {
+        let image = try DiskImage(opening: .open(url: url, mode: .readOnly))
+        return DiskImageBlockLayout(
+          blockSize: UInt64(image.blockSize.rawValue),
+          blockCount: UInt64(image.blockCount)
+        )
+      }
+    #endif
+
+    throw DiskImageStackError.unavailable
+  }
+
+  static func baseBlockLayout(
+    at url: URL,
+    expectedFormat: DiskImageFormat
+  ) throws -> DiskImageBlockLayout {
+    #if canImport(DiskImageKit)
+      if #available(macOS 27.0, *) {
+        let image = try DiskImage(opening: .open(url: url, mode: .readOnly))
+        let matchesFormat = switch expectedFormat {
+        case .raw:
+          image.format == .raw
+        case .asif:
+          image.format == .asif
+        }
+        guard matchesFormat else {
+          throw DiskImageStackError.invalidDiskImage(url, "base disk format does not match")
+        }
+        guard image.layerType == nil, image.parentUUID == nil else {
+          throw DiskImageStackError.invalidDiskImage(url, "base disk must not be an overlay")
+        }
+        if expectedFormat == .asif && image.layerUUID == nil {
+          throw DiskImageStackError.invalidDiskImage(url, "ASIF base disk is missing a UUID")
+        }
+
+        return DiskImageBlockLayout(
+          blockSize: UInt64(image.blockSize.rawValue),
+          blockCount: UInt64(image.blockCount)
+        )
+      }
+    #endif
+
+    throw DiskImageStackError.unavailable
+  }
 
   func createWritableOverlay() throws {
     #if canImport(DiskImageKit)
@@ -68,12 +115,14 @@ struct DiskImageStack {
   }
 
   func makeAttachment(
+    readOnly: Bool = false,
     cachingMode: VZDiskImageCachingMode = .automatic,
     synchronizationMode: VZDiskImageSynchronizationMode = .full
-  ) throws -> VZDiskImageStorageDeviceAttachment {
+  ) throws -> VZStorageDeviceAttachment {
     #if canImport(DiskImageKit)
       if #available(macOS 27.0, *) {
         return try attachmentWithDiskImageKit(
+          readOnly: readOnly,
           cachingMode: cachingMode,
           synchronizationMode: synchronizationMode
         )
@@ -108,6 +157,7 @@ struct DiskImageStack {
 
     @available(macOS 27.0, *)
     private func attachmentWithDiskImageKit(
+      readOnly: Bool,
       cachingMode: VZDiskImageCachingMode,
       synchronizationMode: VZDiskImageSynchronizationMode
     ) throws -> VZDiskImageStorageDeviceAttachment {
@@ -118,7 +168,7 @@ struct DiskImageStack {
       let parent = try validatedParentImage()
       let writableOverlay = try openOverlay(
         at: writableOverlayURL,
-        mode: .readWrite
+        mode: readOnly ? .readOnly : .readWrite
       )
       let stackedImage = try append(writableOverlay, to: parent, at: writableOverlayURL)
       try validateAppendedOverlay(stackedImage, at: writableOverlayURL)
@@ -133,7 +183,7 @@ struct DiskImageStack {
     @available(macOS 27.0, *)
     private func growWritableOverlayWithDiskImageKit(toBlockCount blockCount: UInt64) throws {
       guard blockCount > 0, let desiredBlockCount = Int(exactly: blockCount) else {
-        throw DiskImageStackError.invalidGeometry("invalid stacked disk block count \(blockCount)")
+        throw DiskImageStackError.invalidBlockLayout("invalid stacked disk block count \(blockCount)")
       }
 
       let parent = try validatedParentImage()
@@ -160,31 +210,29 @@ struct DiskImageStack {
     private func validatedParentImage() throws -> DiskImage {
       let expectedBlockSize = try diskImageBlockSize(blockSize)
       guard blockCount > 0, let expectedBlockCount = Int(exactly: blockCount) else {
-        throw DiskImageStackError.invalidGeometry("invalid stacked disk block count \(blockCount)")
+        throw DiskImageStackError.invalidBlockLayout("invalid stacked disk block count \(blockCount)")
       }
 
-      try verifyContentDigest(base)
-      let baseImage = try DiskImage(opening: .open(url: base.url, mode: .readOnly))
-      try validateBase(baseImage, at: base.url, expectedFormat: baseFormat)
+      let baseImage = try DiskImage(opening: .open(url: baseURL, mode: .readOnly))
+      try validateBase(baseImage, at: baseURL, expectedFormat: baseFormat)
 
       var image = baseImage
 
-      for overlay in overlays {
+      for overlayURL in immutableOverlayURLs {
         let openedOverlay = try openOverlay(
-          at: overlay.url,
-          expectedDigest: overlay.contentDigest,
+          at: overlayURL,
           mode: .readOnly
         )
-        let stackedImage = try append(openedOverlay, to: image, at: overlay.url)
-        try validateAppendedOverlay(stackedImage, at: overlay.url)
+        let stackedImage = try append(openedOverlay, to: image, at: overlayURL)
+        try validateAppendedOverlay(stackedImage, at: overlayURL)
         image = stackedImage
       }
 
       guard image.blockSize == expectedBlockSize else {
-        throw DiskImageStackError.invalidGeometry("immutable disk stack does not match manifest block size")
+        throw DiskImageStackError.invalidBlockLayout("immutable disk stack does not match manifest block size")
       }
       guard image.blockCount == expectedBlockCount else {
-        throw DiskImageStackError.invalidGeometry("immutable disk stack does not match manifest block count")
+        throw DiskImageStackError.invalidBlockLayout("immutable disk stack does not match manifest block count")
       }
 
       return image
@@ -216,13 +264,8 @@ struct DiskImageStack {
     @available(macOS 27.0, *)
     private func openOverlay(
       at url: URL,
-      expectedDigest: String? = nil,
       mode: OpenConfiguration.Mode
     ) throws -> DiskImage {
-      if let expectedDigest {
-        try verifyContentDigest(DiskImageFile(url: url, contentDigest: expectedDigest))
-      }
-
       let image = try DiskImage(opening: .open(url: url, mode: mode))
       guard image.format == .asif else {
         throw DiskImageStackError.invalidDiskImage(url, "overlay must use ASIF format")
@@ -248,16 +291,9 @@ struct DiskImageStack {
     }
 
     @available(macOS 27.0, *)
-    private func verifyContentDigest(_ diskImage: DiskImageFile) throws {
-      guard try Digest.hash(diskImage.url) == diskImage.contentDigest else {
-        throw DiskImageStackError.invalidDiskImage(diskImage.url, "disk image content digest does not match")
-      }
-    }
-
-    @available(macOS 27.0, *)
     private func diskImageBlockSize(_ value: UInt64) throws -> DiskImage.BlockSize {
       guard let intValue = Int(exactly: value), let blockSize = DiskImage.BlockSize(rawValue: intValue) else {
-        throw DiskImageStackError.invalidGeometry("unsupported stacked disk block size \(value)")
+        throw DiskImageStackError.invalidBlockLayout("unsupported stacked disk block size \(value)")
       }
 
       return blockSize

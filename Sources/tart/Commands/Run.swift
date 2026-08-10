@@ -455,10 +455,15 @@ struct Run: AsyncParsableCommand {
       let provisioning = try provisioningOpts.map { try GuestProvisioningOptions($0) }
     #endif
 
+    // Keep these values alive while the VM runs. Some additional disks own a
+    // lock that protects their temporary backing files from Config.gc().
+    let additionalDisks = try additionalDisks()
+    defer { withExtendedLifetime(additionalDisks) {} }
+
     vm = try VM(
       vmDir: vmDir,
       network: userSpecifiedNetwork(vmDir: vmDir) ?? NetworkShared(),
-      additionalStorageDevices: try additionalDiskAttachments(),
+      additionalStorageDevices: additionalDisks.map(\.configuration),
       directorySharingDevices: directoryShares() + rosettaDirectoryShare(),
       serialPorts: serialPorts,
       suspendable: suspendable,
@@ -727,9 +732,9 @@ struct Run: AsyncParsableCommand {
     }
   }
 
-  func additionalDiskAttachments() throws -> [VZStorageDeviceConfiguration] {
+  func additionalDisks() throws -> [AdditionalDisk] {
     try disk.map {
-      try AdditionalDisk(parseFrom: $0).configuration
+      try AdditionalDisk(parseFrom: $0)
     }
   }
 
@@ -952,14 +957,27 @@ struct VMView: NSViewRepresentable {
 
 struct AdditionalDisk {
   let configuration: VZStorageDeviceConfiguration
+  // Retained for as long as the additional disk is attached, so Config.gc()
+  // cannot remove a temporary backing file or stacked-disk directory.
+  private let temporaryDiskLock: FileLock?
 
   init(parseFrom: String) throws {
     let (diskPath, readOnly, syncModeRaw, cachingModeRaw) = Self.parseOptions(parseFrom)
 
-    self.configuration = try Self.craft(diskPath, readOnly: readOnly, syncModeRaw: syncModeRaw, cachingModeRaw: cachingModeRaw)
+    (configuration, temporaryDiskLock) = try Self.craft(
+      diskPath,
+      readOnly: readOnly,
+      syncModeRaw: syncModeRaw,
+      cachingModeRaw: cachingModeRaw
+    )
   }
 
-  static func craft(_ diskPath: String, readOnly diskReadOnly: Bool, syncModeRaw: String, cachingModeRaw: String) throws -> VZStorageDeviceConfiguration {
+  private static func craft(
+    _ diskPath: String,
+    readOnly diskReadOnly: Bool,
+    syncModeRaw: String,
+    cachingModeRaw: String
+  ) throws -> (VZStorageDeviceConfiguration, FileLock?) {
     let diskURL = URL(string: diskPath)
 
     if (["nbd", "nbds", "nbd+unix", "nbds+unix"].contains(diskURL?.scheme)) {
@@ -974,7 +992,7 @@ struct AdditionalDisk {
         synchronizationMode: try VZDiskSynchronizationMode(syncModeRaw)
       )
 
-      return VZVirtioBlockDeviceConfiguration(attachment: nbdAttachment)
+      return (VZVirtioBlockDeviceConfiguration(attachment: nbdAttachment), nil)
     }
 
     // Expand the tilde (~) since at this point we're dealing with a local path,
@@ -1005,12 +1023,32 @@ struct AdditionalDisk {
       let blockAttachment = try VZDiskBlockDeviceStorageDeviceAttachment(fileHandle: FileHandle(fileDescriptor: fd, closeOnDealloc: true),
                                                                          readOnly: diskReadOnly, synchronizationMode: try VZDiskSynchronizationMode(syncModeRaw))
 
-      return VZVirtioBlockDeviceConfiguration(attachment: blockAttachment)
+      return (VZVirtioBlockDeviceConfiguration(attachment: blockAttachment), nil)
     }
 
     // Support remote VM names in --disk command-line argument
     if let remoteName = try? RemoteName(diskPath) {
       let vmDir = try VMStorageOCI().open(remoteName)
+
+      if vmDir.isStackedCachedImage {
+        // A cached stacked image has no writable top overlay. Create one in a
+        // disposable directory for this additional-disk attachment.
+        let temporaryVMDir = try VMDirectory.temporary()
+        try FileManager.default.copyItem(at: vmDir.configURL, to: temporaryVMDir.configURL)
+        try FileManager.default.copyItem(at: vmDir.nvramURL, to: temporaryVMDir.nvramURL)
+        try FileManager.default.copyItem(at: vmDir.manifestURL, to: temporaryVMDir.manifestURL)
+        let lock = try FileLock(lockURL: temporaryVMDir.baseURL)
+        try lock.lock()
+        let stack = try temporaryVMDir.diskImageStack()
+        try stack.createWritableOverlay()
+        let attachment = try stack.makeAttachment(
+          readOnly: diskReadOnly,
+          cachingMode: try VZDiskImageCachingMode(cachingModeRaw) ?? .automatic,
+          synchronizationMode: try VZDiskImageSynchronizationMode(syncModeRaw)
+        )
+
+        return (VZVirtioBlockDeviceConfiguration(attachment: attachment), lock)
+      }
 
       // Unfortunately, VZDiskImageStorageDeviceAttachment does not support
       // FileHandle, so we can't easily clone the disk, open it and unlink(2)
@@ -1024,7 +1062,7 @@ struct AdditionalDisk {
 
       let diskImageAttachment = try VZDiskImageStorageDeviceAttachment(url: clonedDiskURL, readOnly: diskReadOnly)
 
-      return VZVirtioBlockDeviceConfiguration(attachment: diskImageAttachment)
+      return (VZVirtioBlockDeviceConfiguration(attachment: diskImageAttachment), lock)
     }
 
     // Error out if the disk is locked by the host (e.g. it was mounted in Finder),
@@ -1040,7 +1078,7 @@ struct AdditionalDisk {
       synchronizationMode: try VZDiskImageSynchronizationMode(syncModeRaw)
     )
 
-    return VZVirtioBlockDeviceConfiguration(attachment: diskImageAttachment)
+    return (VZVirtioBlockDeviceConfiguration(attachment: diskImageAttachment), nil)
   }
 
   static func parseOptions(_ parseFrom: String) -> (String, Bool, String, String) {

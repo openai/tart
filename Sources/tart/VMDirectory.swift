@@ -142,6 +142,24 @@ struct VMDirectory: Prunable {
     layout?.isRunnable == true
   }
 
+  var isStandalone: Bool {
+    layout == .standalone
+  }
+
+  var isStackedVM: Bool {
+    layout == .stackedLocal
+  }
+
+  var isStackedCachedImage: Bool {
+    layout == .stackedOCIRecord
+  }
+
+  /// Shapes that may live in the remote-image cache. A cached stacked image
+  /// has no writable overlay and is intentionally not runnable as a local VM.
+  var isCachedImage: Bool {
+    layout == .standalone || layout == .stackedOCIRecord
+  }
+
   func initialize(overwrite: Bool = false) throws {
     if !overwrite && initialized {
       throw RuntimeError.VMDirectoryAlreadyInitialized("VM directory is already initialized, preventing overwrite")
@@ -172,6 +190,20 @@ struct VMDirectory: Prunable {
     }
   }
 
+  func validateCachedImage(userFriendlyName: String) throws {
+    if !FileManager.default.fileExists(atPath: baseURL.path) {
+      throw RuntimeError.VMDoesNotExist(name: userFriendlyName)
+    }
+
+    if !isCachedImage {
+      throw RuntimeError.VMMissingFiles(
+        "cached image is missing files for a supported layout: "
+          + "standalone requires \(configURL.lastPathComponent), \(diskURL.lastPathComponent) and \(nvramURL.lastPathComponent); "
+          + "stacked requires \(configURL.lastPathComponent), \(manifestURL.lastPathComponent) and \(nvramURL.lastPathComponent)"
+      )
+    }
+  }
+
   func clone(to: VMDirectory, generateMAC: Bool) throws {
     try FileManager.default.copyItem(at: configURL, to: to.configURL)
     try FileManager.default.copyItem(at: nvramURL, to: to.nvramURL)
@@ -198,7 +230,26 @@ struct VMDirectory: Prunable {
     try vmConfig.save(toURL: configURL)
   }
 
-  func resizeDisk(_ sizeGB: UInt16, format: DiskImageFormat = .raw) throws {
+  func resizeDisk(
+    _ sizeGB: UInt16,
+    format: DiskImageFormat = .raw,
+    contentStore: ContentStore? = nil
+  ) throws {
+    if isStackedVM {
+      guard try state() == .Stopped else {
+        throw RuntimeError.VMConfigurationError("VM \"\(name)\" must be stopped before resizing its disk")
+      }
+
+      let stack = try diskImageStack(contentStore: contentStore)
+      let desiredSizeBytes = UInt64(sizeGB) * 1000 * 1000 * 1000
+      guard desiredSizeBytes.isMultiple(of: stack.blockSize) else {
+        throw RuntimeError.InvalidDiskSize("new disk size must align to the stacked disk block size")
+      }
+
+      try stack.growWritableOverlay(toBlockCount: desiredSizeBytes / stack.blockSize)
+      return
+    }
+
     let diskExists = FileManager.default.fileExists(atPath: diskURL.path)
 
     if diskExists {
@@ -332,7 +383,7 @@ struct VMDirectory: Prunable {
   }
 
   func allocatedSizeBytes() throws -> Int {
-    try configURL.allocatedSizeBytes() + diskURL.allocatedSizeBytes() + nvramURL.allocatedSizeBytes()
+    try configURL.allocatedSizeBytes() + localDiskStorageAllocatedSizeBytes() + nvramURL.allocatedSizeBytes()
   }
 
   func allocatedSizeGB() throws -> Int {
@@ -340,7 +391,7 @@ struct VMDirectory: Prunable {
   }
 
   func deduplicatedSizeBytes() throws -> Int {
-    try configURL.deduplicatedSizeBytes() + diskURL.deduplicatedSizeBytes() + nvramURL.deduplicatedSizeBytes()
+    try configURL.deduplicatedSizeBytes() + localDiskStorageDeduplicatedSizeBytes() + nvramURL.deduplicatedSizeBytes()
   }
 
   func deduplicatedSizeGB() throws -> Int {
@@ -348,7 +399,7 @@ struct VMDirectory: Prunable {
   }
 
   func sizeBytes() throws -> Int {
-    try configURL.sizeBytes() + diskURL.sizeBytes() + nvramURL.sizeBytes()
+    try configURL.sizeBytes() + localDiskStorageSizeBytes() + nvramURL.sizeBytes()
   }
 
   func sizeGB() throws -> Int {
@@ -356,6 +407,30 @@ struct VMDirectory: Prunable {
   }
 
   func diskSizeBytes() throws -> Int {
+    if isStackedVM {
+      let blockLayout = try DiskImageStack.diskImageBlockLayout(at: overlayURL)
+      let product = blockLayout.blockSize.multipliedReportingOverflow(by: blockLayout.blockCount)
+      guard !product.overflow, let diskSizeBytes = Int(exactly: product.partialValue) else {
+        throw RuntimeError.VMConfigurationError("VM has invalid stacked disk block layout")
+      }
+
+      return diskSizeBytes
+    }
+
+    if isStackedCachedImage {
+      let manifest = try OCIManifest(fromJSON: Data(contentsOf: manifestURL))
+      guard let blockSize = manifest.diskBlockSize(),
+            let blockCount = manifest.diskBlockCount() else {
+        throw RuntimeError.VMConfigurationError("VM has invalid stacked disk block layout")
+      }
+      let product = blockSize.multipliedReportingOverflow(by: blockCount)
+      guard !product.overflow, let diskSizeBytes = Int(exactly: product.partialValue) else {
+        throw RuntimeError.VMConfigurationError("VM has invalid stacked disk block layout")
+      }
+
+      return diskSizeBytes
+    }
+
     let vmConfig = try VMConfig(fromURL: configURL)
 
     return switch vmConfig.diskFormat {
@@ -376,5 +451,24 @@ struct VMDirectory: Prunable {
 
   func isExplicitlyPulled() -> Bool {
     FileManager.default.fileExists(atPath: explicitlyPulledMark.path)
+  }
+
+  private var localDiskStorageURL: URL {
+    isStackedVM ? overlayURL : diskURL
+  }
+
+  // Cached stacked images own no disk file in their VM directory. Their
+  // immutable disk content lives in the shared content store and must not be
+  // charged to every cached image that references it.
+  private func localDiskStorageAllocatedSizeBytes() throws -> Int {
+    isStackedCachedImage ? 0 : try localDiskStorageURL.allocatedSizeBytes()
+  }
+
+  private func localDiskStorageDeduplicatedSizeBytes() throws -> Int {
+    isStackedCachedImage ? 0 : try localDiskStorageURL.deduplicatedSizeBytes()
+  }
+
+  private func localDiskStorageSizeBytes() throws -> Int {
+    isStackedCachedImage ? 0 : try localDiskStorageURL.sizeBytes()
   }
 }

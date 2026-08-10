@@ -106,7 +106,7 @@ final class OCIManifestTests: XCTestCase {
     }
   }
 
-  func testManifestBlockGeometry() throws {
+  func testManifestBlockLayout() throws {
     var manifest = manifest(diskDescriptors: [chunk(mediaType: diskV2MediaType, suffix: "base-0")])
     manifest.annotations = [
       uncompressedDiskSizeAnnotation: "100000000000",

@@ -39,6 +39,14 @@ struct Set: AsyncParsableCommand {
 
   func run() async throws {
     let vmDir = try VMStorageLocal().open(name)
+
+    // Replacing disk.img would leave a stacked VM with both disk.img and
+    // overlay.asif, which is not a supported local layout. Reject before
+    // saving any other requested configuration changes.
+    if disk != nil, vmDir.isStackedVM {
+      throw ValidationError("--disk is not supported for VMs with a stacked disk")
+    }
+
     var vmConfig = try VMConfig(fromURL: vmDir.configURL)
 
     if let cpu = cpu {

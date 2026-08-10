@@ -31,6 +31,11 @@ struct Import: AsyncParsableCommand {
     print("importing...")
     try tmpVMDir.importFromArchive(path: path)
 
+    if tmpVMDir.isStackedVM || tmpVMDir.isStackedCachedImage {
+      try? FileManager.default.removeItem(at: tmpVMDir.baseURL)
+      throw RuntimeError.ImportFailed("importing stacked VMs is not supported yet")
+    }
+
     try await withTaskCancellationHandler(operation: {
       // Acquire a global lock
       let lock = try FileLock(lockURL: Config().tartHomeDir)

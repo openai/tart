@@ -10,6 +10,10 @@ fileprivate let permissions = FilePermissions(rawValue: 0o644)
 // [2]: https://developer.apple.com/documentation/compression/algorithm/lzfse
 extension VMDirectory {
   func exportToArchive(path: String) throws {
+    guard !isStackedVM && !isStackedCachedImage else {
+      throw RuntimeError.ExportFailed("exporting stacked VMs is not supported yet")
+    }
+
     guard let fileStream = ArchiveByteStream.fileStream(
       path: FilePath(path),
       mode: .writeOnly,
