@@ -22,7 +22,7 @@ class DiskV2: Disk {
   private static let holeGranularityBytes = 4 * 1024 * 1024
   private static let zeroChunk = Data(count: holeGranularityBytes)
 
-  static func push(diskURL: URL, registry: Registry, chunkSizeMb: Int, concurrency: UInt, progress: Progress) async throws -> [OCIManifestLayer] {
+  static func push(diskURL: URL, registry: any BlobStorage, chunkSizeMb: Int, concurrency: UInt, progress: Progress) async throws -> [OCIManifestLayer] {
     var pushedLayers: [(index: Int, pushedLayer: OCIManifestLayer)] = []
 
     // Open the disk file

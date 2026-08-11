@@ -4,6 +4,10 @@ import Foundation
 let ociManifestMediaType = "application/vnd.oci.image.manifest.v1+json"
 let ociConfigMediaType = "application/vnd.oci.image.config.v1+json"
 
+// Docker manifest and config media types (schema v2)
+let dockerManifestMediaType = "application/vnd.docker.distribution.manifest.v2+json"
+let dockerConfigMediaType = "application/vnd.docker.container.image.v1+json"
+
 // Layer media types
 let configMediaType = "application/vnd.cirruslabs.tart.config.v1"
 let diskV2MediaType = "application/vnd.cirruslabs.tart.disk.v2"
