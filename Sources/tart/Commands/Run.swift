@@ -250,6 +250,29 @@ struct Run: AsyncParsableCommand {
   @Flag(help: ArgumentHelp("Restrict network access to the host-only network"))
   var netHost: Bool = false
 
+  #if compiler(>=6.4)
+    @Flag(help: ArgumentHelp("Use native vmnet-backed networking instead of Softnet for port forwarding",
+                             discussion: """
+                             Adopts the VZVmnetNetworkDeviceAttachment API introduced in macOS 26.
+                             vmnet networks run in-process with no sidecar, so this can replace --net-softnet
+                             for the common "CI VM with a few forwarded ports" case.
+
+                             Requires the host to be running macOS 26 (or newer).
+                             """))
+    var netVmnet: Bool = false
+
+    @Option(help: ArgumentHelp("Comma-separated list of ports to forward into the vmnet guest (e.g. --net-vmnet-expose 2222:22,8080:80/tcp,5353:53/udp)",
+                               discussion: """
+                               Each rule has the form EXTERNAL_PORT:INTERNAL_PORT[/PROTOCOL] where PROTOCOL
+                               is tcp (default) or udp. EXTERNAL_PORT is bound on the host's egress interface
+                               and forwarded to INTERNAL_PORT on the guest.
+
+                               Implies --net-vmnet.
+                               """,
+                               valueName: "comma-separated port specifications"))
+    var netVmnetExpose: String?
+  #endif
+
   @Option(help: ArgumentHelp("Set the root disk options (e.g. --root-disk-opts=\"ro\" or --root-disk-opts=\"caching=cached,sync=none\")",
                              discussion: """
                              Options are comma-separated and are as follows:
@@ -329,10 +352,29 @@ struct Run: AsyncParsableCommand {
     if netBridged.count > 0 { netFlags += 1 }
     if netSoftnet { netFlags += 1 }
     if netHost { netFlags += 1 }
+    #if compiler(>=6.4)
+      // Automatically enable --net-vmnet when --net-vmnet-expose is specified
+      if netVmnetExpose != nil {
+        netVmnet = true
+      }
+      if netVmnet { netFlags += 1 }
+    #endif
 
     if netFlags > 1 {
-      throw ValidationError("--net-bridged, --net-softnet and --net-host are mutually exclusive")
+      #if compiler(>=6.4)
+        throw ValidationError("--net-bridged, --net-softnet, --net-host and --net-vmnet are mutually exclusive")
+      #else
+        throw ValidationError("--net-bridged, --net-softnet and --net-host are mutually exclusive")
+      #endif
     }
+
+    #if compiler(>=6.4)
+      if netVmnet {
+        if #unavailable(macOS 26) {
+          throw ValidationError("--net-vmnet requires the host to be running macOS 26 (or newer)")
+        }
+      }
+    #endif
 
     if graphics && noGraphics {
       throw ValidationError("--graphics and --no-graphics are mutually exclusive")
@@ -696,6 +738,14 @@ struct Run: AsyncParsableCommand {
 
       return try Softnet(vmMACAddress: config.macAddress.string, extraArguments: ["--vm-net-type", "host"] + softnetExtraArguments, controlFD: netSoftnetControlFd)
     }
+
+    #if compiler(>=6.4)
+      if netVmnet, #available(macOS 26, *) {
+        let config = try VMConfig.init(fromURL: vmDir.configURL)
+        let portForwardings = try netVmnetExpose.map { try NetworkVmnet.parsePortForwardings($0) } ?? []
+        return try NetworkVmnet(vmMACAddress: config.macAddress.string, portForwardings: portForwardings)
+      }
+    #endif
 
     if netBridged.count > 0 {
       func findBridgedInterface(_ name: String) throws -> VZBridgedNetworkInterface {
