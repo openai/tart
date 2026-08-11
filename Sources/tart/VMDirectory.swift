@@ -26,6 +26,9 @@ struct VMDirectory: Prunable {
   var manifestURL: URL {
     baseURL.appendingPathComponent("manifest.json")
   }
+  var overlayURL: URL {
+    baseURL.appendingPathComponent("overlay.asif")
+  }
   var controlSocketURL: URL {
     URL(fileURLWithPath: "control.sock", relativeTo: baseURL)
   }
@@ -87,10 +90,56 @@ struct VMDirectory: Prunable {
     return VMDirectory(baseURL: tmpDir)
   }
 
+  private var hasRequiredMetadata: Bool {
+    let fileManager = FileManager.default
+
+    return fileManager.fileExists(atPath: configURL.path) &&
+      fileManager.fileExists(atPath: nvramURL.path)
+  }
+
+  enum Layout: Equatable {
+    /// Existing Tart layout with one independently attachable `disk.img`.
+    /// A pulled standalone OCI record may also carry `manifest.json`.
+    case standalone
+
+    /// Runnable stacked VM with immutable disk files from `manifest.json` and
+    /// a private writable `overlay.asif`.
+    case stackedLocal
+
+    /// Pulled OCI record for a stacked image. It intentionally has no writable
+    /// overlay and becomes runnable only after `tart clone` creates one.
+    case stackedOCIRecord
+
+    var isRunnable: Bool {
+      self != .stackedOCIRecord
+    }
+  }
+
+  var layout: Layout? {
+    let fileManager = FileManager.default
+    let hasDisk = fileManager.fileExists(atPath: diskURL.path)
+    let hasManifest = fileManager.fileExists(atPath: manifestURL.path)
+    let hasOverlay = fileManager.fileExists(atPath: overlayURL.path)
+
+    guard hasRequiredMetadata else {
+      return nil
+    }
+
+    if hasDisk && !hasOverlay {
+      return .standalone
+    }
+    if !hasDisk && hasManifest && hasOverlay {
+      return .stackedLocal
+    }
+    if !hasDisk && hasManifest && !hasOverlay {
+      return .stackedOCIRecord
+    }
+
+    return nil
+  }
+
   var initialized: Bool {
-    FileManager.default.fileExists(atPath: configURL.path) &&
-      FileManager.default.fileExists(atPath: diskURL.path) &&
-      FileManager.default.fileExists(atPath: nvramURL.path)
+    layout?.isRunnable == true
   }
 
   func initialize(overwrite: Bool = false) throws {
@@ -103,6 +152,9 @@ struct VMDirectory: Prunable {
     try? FileManager.default.removeItem(at: configURL)
     try? FileManager.default.removeItem(at: diskURL)
     try? FileManager.default.removeItem(at: nvramURL)
+    try? FileManager.default.removeItem(at: manifestURL)
+    try? FileManager.default.removeItem(at: overlayURL)
+    try? FileManager.default.removeItem(at: stateURL)
   }
 
   func validate(userFriendlyName: String) throws {
@@ -111,8 +163,12 @@ struct VMDirectory: Prunable {
     }
 
     if !initialized {
-      throw RuntimeError.VMMissingFiles("VM is missing some of its files (\(configURL.lastPathComponent),"
-        + " \(diskURL.lastPathComponent) or \(nvramURL.lastPathComponent))")
+      throw RuntimeError.VMMissingFiles(
+        "VM is missing files for a supported layout: "
+          + "standalone requires \(configURL.lastPathComponent), \(diskURL.lastPathComponent) and \(nvramURL.lastPathComponent); "
+          + "stacked requires \(configURL.lastPathComponent), \(manifestURL.lastPathComponent), "
+          + "\(overlayURL.lastPathComponent) and \(nvramURL.lastPathComponent)"
+      )
     }
   }
 
