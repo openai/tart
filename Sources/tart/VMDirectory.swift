@@ -198,6 +198,23 @@ struct VMDirectory: Prunable {
     try vmConfig.save(toURL: configURL)
   }
 
+  func initializeLinuxMachineIdentifier() throws {
+    var vmConfig = try VMConfig(fromURL: configURL)
+    guard var vmLinux = vmConfig.platform as? Linux else {
+      throw RuntimeError.VMConfigurationError("cannot initialize a Linux machine identifier on a non-Linux VM")
+    }
+    guard vmLinux.machineIdentifier == nil else {
+      throw RuntimeError.VMConfigurationError(
+        "cannot initialize a Linux machine identifier when one already exists"
+      )
+    }
+
+    vmLinux.machineIdentifier = VZGenericMachineIdentifier()
+    vmConfig.platform = vmLinux
+
+    try vmConfig.save(toURL: configURL)
+  }
+
   func resizeDisk(_ sizeGB: UInt16, format: DiskImageFormat = .raw) throws {
     let diskExists = FileManager.default.fileExists(atPath: diskURL.path)
 

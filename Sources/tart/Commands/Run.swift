@@ -271,7 +271,9 @@ struct Run: AsyncParsableCommand {
   var rootDiskOpts: String = ""
 
   #if arch(arm64)
-    @Flag(help: ArgumentHelp("Disables audio and entropy devices and switches to only Mac-specific input devices.", discussion: "Useful for running a VM that can be suspended via \"tart suspend\"."))
+    @Flag(
+      help: ArgumentHelp("Disables or replaces devices that do not support VM suspension, such as audio, entropy and some input devices.",
+                         discussion: "Useful for running a VM that can be suspended via \"tart suspend\"."))
   #endif
   var suspendable: Bool = false
 
@@ -359,7 +361,11 @@ struct Run: AsyncParsableCommand {
     if suspendable {
       let config = try VMConfig.init(fromURL: vmDir.configURL)
       if !(config.platform is PlatformSuspendable) {
-        throw ValidationError("You can only suspend macOS VMs")
+        throw ValidationError("This platform is not suspendable")
+      }
+
+      if let linux = config.platform as? Linux, linux.machineIdentifier == nil {
+        throw ValidationError("Linux VMs without a machine identifier cannot be suspended or resumed")
       }
 
       if noTrackpad {
