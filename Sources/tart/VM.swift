@@ -64,12 +64,7 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
 
     // Initialize the virtual machine and its configuration
     self.network = network
-    let disk: any DiskAttachmentSource = if vmDir.isStackedVM {
-      try vmDir.diskImageStack()
-    } else {
-      DiskImageAttachment(url: vmDir.diskURL)
-    }
-    configuration = try Self.craftConfiguration(disk: disk,
+    configuration = try Self.craftConfiguration(vmDir: vmDir,
                                                 nvramURL: vmDir.nvramURL, vmConfig: config,
                                                 network: network, additionalStorageDevices: additionalStorageDevices,
                                                 directorySharingDevices: directorySharingDevices,
@@ -201,7 +196,7 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
 
       // Initialize the virtual machine and its configuration
       self.network = network
-      configuration = try Self.craftConfiguration(disk: DiskImageAttachment(url: vmDir.diskURL),
+      configuration = try Self.craftConfiguration(vmDir: vmDir,
                                                   nvramURL: vmDir.nvramURL,
                                                   vmConfig: config, network: network,
                                                   additionalStorageDevices: additionalStorageDevices,
@@ -318,7 +313,7 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
   }
 
   static func craftConfiguration(
-    disk: any DiskAttachmentSource,
+    vmDir: VMDirectory,
     nvramURL: URL,
     vmConfig: VMConfig,
     network: Network = NetworkShared(),
@@ -413,11 +408,22 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
     // When not specified, use "cached" caching mode for Linux VMs to prevent file-system corruption[1]
     //
     // [1]: https://github.com/cirruslabs/tart/pull/675
-    let attachment = try disk.makeAttachment(
-      readOnly: false,
-      cachingMode: caching ?? (vmConfig.os == .linux ? .cached : .automatic),
-      synchronizationMode: sync
-    )
+    let cachingMode = caching ?? (vmConfig.os == .linux ? .cached : .automatic)
+    let attachment: VZStorageDeviceAttachment
+    if vmDir.isStackedVM {
+      attachment = try vmDir.diskImageStack().makeAttachment(
+        readOnly: false,
+        cachingMode: cachingMode,
+        synchronizationMode: sync
+      )
+    } else {
+      attachment = try VZDiskImageStorageDeviceAttachment(
+        url: vmDir.diskURL,
+        readOnly: false,
+        cachingMode: cachingMode,
+        synchronizationMode: sync
+      )
+    }
 
     var devices: [VZStorageDeviceConfiguration] = [VZVirtioBlockDeviceConfiguration(attachment: attachment)]
     devices.append(contentsOf: additionalStorageDevices)

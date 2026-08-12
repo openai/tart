@@ -1,10 +1,8 @@
 import Foundation
-import System
 
 enum ContentStoreError: Error, Equatable {
   case invalidContentDigest(String)
   case contentDigestMismatch(expected: String, actual: String)
-  case operationFailed(String)
 }
 
 /// Opaque content-addressed storage for immutable reconstructed files.
@@ -45,7 +43,6 @@ struct ContentStore {
   /// reconstructing this content entry on a later attempt.
   func resumableContentURL(for contentDigest: String) throws -> URL {
     let targetURL = try contentURL(for: contentDigest)
-    try FileManager.default.createDirectory(at: targetURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 
     return targetURL.deletingLastPathComponent().appendingPathComponent(".\(targetURL.lastPathComponent).partial")
   }
@@ -55,7 +52,6 @@ struct ContentStore {
   /// descriptor and disappears when the owning process exits.
   func lockURL(for contentDigest: String) throws -> URL {
     let targetURL = try contentURL(for: contentDigest)
-    try FileManager.default.createDirectory(at: targetURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 
     let lockURL = targetURL.deletingLastPathComponent().appendingPathComponent(".\(targetURL.lastPathComponent).lock")
     if !FileManager.default.fileExists(atPath: lockURL.path) {
@@ -103,55 +99,22 @@ struct ContentStore {
     }
 
     let targetURL = try contentURL(for: contentDigest)
+    let lock = try FileLock(lockURL: baseURL)
+    try lock.lock()
+    defer { try? lock.unlock() }
 
-    while true {
-      if try moveItemWithoutReplacing(at: temporaryURL, to: targetURL) {
-        return targetURL
-      }
-
-      if let existingURL = try existingContentURL(for: contentDigest) {
-        try? FileManager.default.removeItem(at: temporaryURL)
-        return existingURL
-      }
-
-      // The destination exists but is corrupt. Swapping keeps the digest path
-      // continuously populated: if another repair wins first, both sides of
-      // this exchange are already digest-valid and the result remains valid.
-      if try exchangeItem(at: temporaryURL, with: targetURL) {
-        try? FileManager.default.removeItem(at: temporaryURL)
-        return targetURL
-      }
-    }
-  }
-
-  /// Atomically publishes a content entry without replacing an existing one.
-  /// Returns false when another installer already created the destination.
-  private func moveItemWithoutReplacing(at sourceURL: URL, to destinationURL: URL) throws -> Bool {
-    if renamex_np(sourceURL.path, destinationURL.path, UInt32(RENAME_EXCL)) == 0 {
-      return true
+    if let existingURL = try existingContentURL(for: contentDigest) {
+      try? FileManager.default.removeItem(at: temporaryURL)
+      return existingURL
     }
 
-    if errno == EEXIST {
-      return false
+    if FileManager.default.fileExists(atPath: targetURL.path) {
+      _ = try FileManager.default.replaceItemAt(targetURL, withItemAt: temporaryURL)
+    } else {
+      try FileManager.default.moveItem(at: temporaryURL, to: targetURL)
     }
 
-    let details = Errno(rawValue: CInt(errno))
-    throw ContentStoreError.operationFailed("failed to install content entry \(destinationURL.path): \(details)")
-  }
-
-  /// Atomically exchanges a verified temporary file with a corrupt content
-  /// entry. Returns false when the destination disappeared before the swap.
-  private func exchangeItem(at sourceURL: URL, with destinationURL: URL) throws -> Bool {
-    if renamex_np(sourceURL.path, destinationURL.path, UInt32(RENAME_SWAP)) == 0 {
-      return true
-    }
-
-    if errno == ENOENT {
-      return false
-    }
-
-    let details = Errno(rawValue: CInt(errno))
-    throw ContentStoreError.operationFailed("failed to repair content entry \(destinationURL.path): \(details)")
+    return targetURL
   }
 
   private func validatedDigestHex(_ contentDigest: String) throws -> String {

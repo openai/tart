@@ -964,7 +964,7 @@ struct AdditionalDisk {
   init(parseFrom: String) throws {
     let (diskPath, readOnly, syncModeRaw, cachingModeRaw) = Self.parseOptions(parseFrom)
 
-    (configuration, temporaryDiskLock) = try Self.craft(
+    self = try Self.craft(
       diskPath,
       readOnly: readOnly,
       syncModeRaw: syncModeRaw,
@@ -972,12 +972,17 @@ struct AdditionalDisk {
     )
   }
 
+  private init(configuration: VZStorageDeviceConfiguration, temporaryDiskLock: FileLock? = nil) {
+    self.configuration = configuration
+    self.temporaryDiskLock = temporaryDiskLock
+  }
+
   private static func craft(
     _ diskPath: String,
     readOnly diskReadOnly: Bool,
     syncModeRaw: String,
     cachingModeRaw: String
-  ) throws -> (VZStorageDeviceConfiguration, FileLock?) {
+  ) throws -> AdditionalDisk {
     let diskURL = URL(string: diskPath)
 
     if (["nbd", "nbds", "nbd+unix", "nbds+unix"].contains(diskURL?.scheme)) {
@@ -992,7 +997,7 @@ struct AdditionalDisk {
         synchronizationMode: try VZDiskSynchronizationMode(syncModeRaw)
       )
 
-      return (VZVirtioBlockDeviceConfiguration(attachment: nbdAttachment), nil)
+      return AdditionalDisk(configuration: VZVirtioBlockDeviceConfiguration(attachment: nbdAttachment))
     }
 
     // Expand the tilde (~) since at this point we're dealing with a local path,
@@ -1023,7 +1028,7 @@ struct AdditionalDisk {
       let blockAttachment = try VZDiskBlockDeviceStorageDeviceAttachment(fileHandle: FileHandle(fileDescriptor: fd, closeOnDealloc: true),
                                                                          readOnly: diskReadOnly, synchronizationMode: try VZDiskSynchronizationMode(syncModeRaw))
 
-      return (VZVirtioBlockDeviceConfiguration(attachment: blockAttachment), nil)
+      return AdditionalDisk(configuration: VZVirtioBlockDeviceConfiguration(attachment: blockAttachment))
     }
 
     // Support remote VM names in --disk command-line argument
@@ -1047,7 +1052,7 @@ struct AdditionalDisk {
           synchronizationMode: try VZDiskImageSynchronizationMode(syncModeRaw)
         )
 
-        return (VZVirtioBlockDeviceConfiguration(attachment: attachment), lock)
+        return AdditionalDisk(configuration: VZVirtioBlockDeviceConfiguration(attachment: attachment), temporaryDiskLock: lock)
       }
 
       // Unfortunately, VZDiskImageStorageDeviceAttachment does not support
@@ -1062,7 +1067,7 @@ struct AdditionalDisk {
 
       let diskImageAttachment = try VZDiskImageStorageDeviceAttachment(url: clonedDiskURL, readOnly: diskReadOnly)
 
-      return (VZVirtioBlockDeviceConfiguration(attachment: diskImageAttachment), lock)
+      return AdditionalDisk(configuration: VZVirtioBlockDeviceConfiguration(attachment: diskImageAttachment), temporaryDiskLock: lock)
     }
 
     // Error out if the disk is locked by the host (e.g. it was mounted in Finder),
@@ -1078,7 +1083,7 @@ struct AdditionalDisk {
       synchronizationMode: try VZDiskImageSynchronizationMode(syncModeRaw)
     )
 
-    return (VZVirtioBlockDeviceConfiguration(attachment: diskImageAttachment), nil)
+    return AdditionalDisk(configuration: VZVirtioBlockDeviceConfiguration(attachment: diskImageAttachment))
   }
 
   static func parseOptions(_ parseFrom: String) -> (String, Bool, String, String) {

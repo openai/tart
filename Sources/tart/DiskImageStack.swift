@@ -34,7 +34,7 @@ enum DiskImageStackError: Error, Equatable, CustomStringConvertible {
   }
 }
 
-struct DiskImageStack: DiskAttachmentSource {
+struct DiskImageStack {
   /// DiskImageKit-ready paths and block layout after Tart disk chunks have been
   /// reconstructed into complete immutable files. The writable overlay stays
   /// private to one VM.

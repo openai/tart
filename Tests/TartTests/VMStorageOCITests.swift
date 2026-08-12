@@ -23,7 +23,7 @@ final class VMStorageOCITests: XCTestCase {
     }
   }
 
-  func testBaseCloneRequiresManifestForLegacyStandaloneCachedImage() throws {
+  func testStackedCloneRequiresManifestForLegacyStandaloneCachedImage() throws {
     try withTemporaryTartHome {
       let manifest = try flatManifest()
       let name = try digestName(for: manifest)
@@ -120,6 +120,72 @@ final class VMStorageOCITests: XCTestCase {
       try Data("corrupt".utf8).write(to: overlayURL)
       XCTAssertFalse(try storage.hasCompleteCachedImage(name, manifest: manifest))
       XCTAssertEqual(try storage.requiredDiskStorageBytes(for: manifest), 20)
+    }
+  }
+
+  func testStackedPullReusesPreviouslyPulledStandaloneDisk() throws {
+    try withTemporaryTartHome {
+      let diskData = Data([0])
+      let contentDigest = Digest.hash(diskData)
+      let flatManifest = try flatManifest()
+      let flatName = try digestName(for: flatManifest)
+      let storage = try VMStorageOCI()
+      let flatRecord = try storage.create(flatName)
+      try config().save(toURL: flatRecord.configURL)
+      XCTAssertTrue(FileManager.default.createFile(atPath: flatRecord.nvramURL.path, contents: Data()))
+      try diskData.write(to: flatRecord.diskURL)
+      try flatManifest.toJSON().write(to: flatRecord.manifestURL)
+
+      let stackedManifest = try stackedManifest(baseContentDigest: contentDigest)
+      XCTAssertNil(try ContentStore().existingContentURL(for: contentDigest))
+
+      try storage.reuseStandaloneDiskForStackedBaseIfPossible(stackedManifest)
+
+      let reusedURL = try XCTUnwrap(try ContentStore().existingContentURL(for: contentDigest))
+      XCTAssertEqual(try Data(contentsOf: reusedURL), diskData)
+    }
+  }
+
+  func testStackedPullDoesNotRehashInstalledBaseBeforeReuse() throws {
+    try withTemporaryTartHome {
+      let contentDigest = Digest.hash(Data("base".utf8))
+      let manifest = try stackedManifest(baseContentDigest: contentDigest)
+      let contentURL = try ContentStore().contentURL(for: contentDigest)
+
+      // Hashing this path would throw. Once an entry is published, this
+      // fast path must trust its presence and let normal pull validation
+      // repair unusable content later.
+      try FileManager.default.createDirectory(at: contentURL, withIntermediateDirectories: false)
+
+      XCTAssertNoThrow(try VMStorageOCI().reuseStandaloneDiskForStackedBaseIfPossible(manifest))
+    }
+  }
+
+  func testNewTagDoesNotValidateCachedStackBeforeLock() throws {
+    try withTemporaryTartHome {
+      let baseDigest = Digest.hash(Data("base".utf8))
+      let overlayDigest = Digest.hash(Data("overlay".utf8))
+      let manifest = try stackedManifest(
+        baseContentDigest: baseDigest,
+        overlayContentDigest: overlayDigest
+      )
+      let digestName = try digestName(for: manifest)
+      let tagName = RemoteName(
+        host: digestName.host,
+        namespace: digestName.namespace,
+        reference: Reference(tag: "latest")
+      )
+      let storage = try VMStorageOCI()
+      let record = try storage.create(digestName)
+      try config().save(toURL: record.configURL)
+      XCTAssertTrue(FileManager.default.createFile(atPath: record.nvramURL.path, contents: Data()))
+      try manifest.toJSON().write(to: record.manifestURL)
+
+      // Hashing this directory as a disk file throws. A new tag must skip
+      // validation until after it has taken the host lock.
+      let contentURL = try ContentStore().contentURL(for: baseDigest)
+      try FileManager.default.createDirectory(at: contentURL, withIntermediateDirectories: false)
+      XCTAssertFalse(try storage.hasCompleteLinkedImage(tagName, digestName: digestName, manifest: manifest))
     }
   }
 

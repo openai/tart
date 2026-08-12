@@ -80,7 +80,7 @@ extension VMDirectory {
 
     var manifest = try OCIManifest(fromJSON: Data(contentsOf: manifestURL))
     guard case .flat = try manifest.tartDiskRepresentation() else {
-      throw RuntimeError.VMConfigurationError("--base cannot use an image that already has a stacked disk")
+      throw RuntimeError.VMConfigurationError("--stacked cannot use an image that already has a stacked disk")
     }
 
     guard let firstDiskIndex = manifest.layers.firstIndex(where: { $0.mediaType == diskV2MediaType }) else {

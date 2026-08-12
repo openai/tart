@@ -87,6 +87,17 @@ class VMStorageOCI: PrunableStorage {
     return missingGroups.isEmpty
   }
 
+  /// The lock-free pull fast path is only useful for a tag that already
+  /// points at this digest. New or retargeted tags validate once after taking
+  /// the host lock instead of hashing a large stack twice.
+  func hasCompleteLinkedImage(_ name: RemoteName, digestName: RemoteName, manifest: OCIManifest) throws -> Bool {
+    guard exists(name), linked(from: name, to: digestName) else {
+      return false
+    }
+
+    return try hasCompleteCachedImage(digestName, manifest: manifest)
+  }
+
   /// Bytes that this pull may need to materialize locally. For stacked images
   /// this is the sum of only the missing complete disk files, not the final
   /// guest-visible disk block layout.
@@ -294,8 +305,7 @@ class VMStorageOCI: PrunableStorage {
     let digestName = RemoteName(host: name.host, namespace: name.namespace,
                                 reference: Reference(digest: Digest.hash(manifestData)))
 
-    let hasCompleteDigestImage = try hasCompleteCachedImage(digestName, manifest: manifest)
-    if exists(name) && hasCompleteDigestImage && linked(from: name, to: digestName) {
+    if try hasCompleteLinkedImage(name, digestName: digestName, manifest: manifest) {
       // optimistically check if we need to do anything at all before locking
       defaultLogger.appendNewLine("\(digestName) image is already cached and linked!")
       return
@@ -334,6 +344,11 @@ class VMStorageOCI: PrunableStorage {
       // Lock the temporary VM directory to prevent it's garbage collection
       let tmpVMDirLock = try FileLock(lockURL: tmpVMDir.baseURL)
       try tmpVMDirLock.lock()
+
+      // A previously pulled standalone image already has the complete base
+      // disk locally as disk.img. Promote that file into the content store
+      // before sizing or pulling so a stacked child only fetches overlays.
+      try reuseStandaloneDiskForStackedBaseIfPossible(manifest)
 
       // Try to reclaim some cache space if we know the VM size in advance
       if let requiredDiskStorageBytes = try requiredDiskStorageBytes(for: manifest) {
@@ -435,6 +450,60 @@ class VMStorageOCI: PrunableStorage {
     }
 
     return missingGroups
+  }
+
+  /// Seed a stacked image's immutable base from an already pulled standalone
+  /// OCI record when both manifests describe the same transport chunks. The
+  /// content store still verifies the whole-file digest before publishing it.
+  func reuseStandaloneDiskForStackedBaseIfPossible(_ manifest: OCIManifest) throws {
+    guard case .stacked(let base, _) = try manifest.tartDiskRepresentation(),
+          let contentDigest = base.contentDigest else {
+      return
+    }
+
+    let contentStore = try ContentStore()
+    // Content-store entries are verified when installed. Avoid hashing a
+    // potentially large prewarmed base again on every stacked pull.
+    guard try contentStore.contentURLIfPresent(for: contentDigest) == nil else {
+      return
+    }
+
+    for (_, vmDir, isSymlink) in try list() where !isSymlink && vmDir.isStandalone {
+      guard let manifestData = try? Data(contentsOf: vmDir.manifestURL),
+            let candidateManifest = try? OCIManifest(fromJSON: manifestData),
+            case .flat(let candidateBase) = try? candidateManifest.tartDiskRepresentation(),
+            diskChunksMatch(candidateBase.chunks, base.chunks) else {
+        continue
+      }
+
+      let temporaryURL = try contentStore.temporaryContentURL(for: contentDigest)
+      do {
+        try FileManager.default.copyItem(at: vmDir.diskURL, to: temporaryURL)
+        _ = try contentStore.install(temporaryURL, contentDigest: contentDigest)
+        return
+      } catch ContentStoreError.contentDigestMismatch {
+        try? FileManager.default.removeItem(at: temporaryURL)
+      } catch {
+        try? FileManager.default.removeItem(at: temporaryURL)
+        throw error
+      }
+    }
+  }
+
+  /// Compare the OCI transport identity while ignoring stacked-only
+  /// whole-file annotations added to the first base chunk.
+  private func diskChunksMatch(_ left: [OCIManifestLayer], _ right: [OCIManifestLayer]) -> Bool {
+    guard left.count == right.count else {
+      return false
+    }
+
+    return zip(left, right).allSatisfy { left, right in
+      left.mediaType == right.mediaType &&
+        left.size == right.size &&
+        left.digest == right.digest &&
+        left.uncompressedSize() == right.uncompressedSize() &&
+        left.uncompressedContentDigest() == right.uncompressedContentDigest()
+    }
   }
 
   func linked(from: RemoteName, to: RemoteName) -> Bool {

@@ -32,7 +32,7 @@ struct Clone: AsyncParsableCommand {
   var deduplicate: Bool = false
 
   @Flag(help: "create a stacked disk that uses the source image as an immutable base")
-  var base: Bool = false
+  var stacked: Bool = false
 
   @Option(help: ArgumentHelp("limit automatic pruning to n gigabytes", valueName: "n"))
   var pruneLimit: UInt = 100
@@ -52,13 +52,13 @@ struct Clone: AsyncParsableCommand {
     let localStorage = try VMStorageLocal()
     let remoteName = try? RemoteName(sourceName)
 
-    if base {
+    if stacked {
       guard remoteName != nil else {
-        throw ValidationError("--base requires a remote image")
+        throw ValidationError("--stacked requires a remote image")
       }
     }
 
-    if let remoteName, try !ociStorage.hasUsableCachedImageForClone(remoteName, requireManifest: base) {
+    if let remoteName, try !ociStorage.hasUsableCachedImageForClone(remoteName, requireManifest: stacked) {
       // Pull the VM in case it's OCI-based and doesn't exist locally yet
       let registry = try Registry(host: remoteName.host, namespace: remoteName.namespace, insecure: insecure)
       try await ociStorage.pull(remoteName, registry: registry, concurrency: concurrency, deduplicate: deduplicate)
@@ -80,12 +80,12 @@ struct Clone: AsyncParsableCommand {
       let generateMAC = try localStorage.hasVMsWithMACAddress(macAddress: sourceVM.macAddress())
         && sourceState != .Suspended
 
-      if base {
+      if stacked {
         guard sourceVM.isStandalone else {
-          throw ValidationError("--base cannot use an image that already has a stacked disk")
+          throw ValidationError("--stacked cannot use an image that already has a stacked disk")
         }
         guard try VMConfig(fromURL: sourceVM.configURL).os == .darwin else {
-          throw ValidationError("--base currently supports only macOS images")
+          throw ValidationError("--stacked currently supports only macOS images")
         }
         try sourceVM.cloneAsStackedBase(to: tmpVMDir, generateMAC: generateMAC)
       } else if sourceVM.isStackedCachedImage {
