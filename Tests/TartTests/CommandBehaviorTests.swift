@@ -62,6 +62,25 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testGarbageCollectionPreservesLockedTemporaryDirectory() throws {
+    try withTemporaryTartHome {
+      let temporaryVMDir = try VMDirectory.temporary()
+      let lock = try FileLock(lockURL: temporaryVMDir.baseURL)
+      try lock.lock()
+      XCTAssertTrue(FileManager.default.createFile(
+        atPath: temporaryVMDir.overlayURL.path,
+        contents: Data("overlay".utf8)
+      ))
+
+      try Config().gc()
+      XCTAssertTrue(FileManager.default.fileExists(atPath: temporaryVMDir.overlayURL.path))
+
+      try lock.unlock()
+      try Config().gc()
+      XCTAssertFalse(FileManager.default.fileExists(atPath: temporaryVMDir.baseURL.path))
+    }
+  }
+
   private func config() -> VMConfig {
     VMConfig(
       platform: Linux(),

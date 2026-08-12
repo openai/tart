@@ -250,9 +250,18 @@ extension VMDirectory {
       ))
     }
 
-    let frozenOverlayURL = try Config().tartTmpDir.appendingPathComponent("\(UUID().uuidString).asif")
+    // Keep the snapshot out of startup GC while this potentially long push
+    // hashes, uploads, and inspects it.
+    let frozenOverlayDirectory = try VMDirectory.temporary()
+    let frozenOverlayLock = try FileLock(lockURL: frozenOverlayDirectory.baseURL)
+    try frozenOverlayLock.lock()
+    defer {
+      try? frozenOverlayLock.unlock()
+      try? FileManager.default.removeItem(at: frozenOverlayDirectory.baseURL)
+    }
+
+    let frozenOverlayURL = frozenOverlayDirectory.baseURL.appendingPathComponent("overlay.asif")
     try FileManager.default.copyItem(at: overlayURL, to: frozenOverlayURL)
-    defer { try? FileManager.default.removeItem(at: frozenOverlayURL) }
 
     let overlaySize = try FileManager.default.attributesOfItem(atPath: frozenOverlayURL.path)[.size] as! Int64
     defaultLogger.appendNewLine("pushing overlay...")
