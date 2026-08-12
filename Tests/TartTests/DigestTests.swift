@@ -21,4 +21,13 @@ final class DigestTests: XCTestCase {
 
     XCTAssertEqual(Digest.hash(data), "sha256:d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592")
   }
+
+  func testFileHashingReadsMultipleChunks() throws {
+    let data = Data(repeating: 0xab, count: Digest.fileReadChunkSize + 1)
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try data.write(to: url)
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    XCTAssertEqual(try Digest.hash(url), Digest.hash(data))
+  }
 }

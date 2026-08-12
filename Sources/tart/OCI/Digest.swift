@@ -7,6 +7,8 @@ enum DigestError: Error {
 }
 
 class Digest {
+  static let fileReadChunkSize = 4 * 1024 * 1024
+
   var hash: SHA256 = SHA256()
 
   func update(_ data: Data) {
@@ -22,7 +24,16 @@ class Digest {
   }
 
   static func hash(_ url: URL) throws -> String {
-    hash(try Data(contentsOf: url))
+    let fh = try FileHandle(forReadingFrom: url)
+    defer { try? fh.close() }
+
+    let digest = Digest()
+
+    while let data = try fh.read(upToCount: fileReadChunkSize), !data.isEmpty {
+      digest.update(data)
+    }
+
+    return digest.finalize()
   }
 
   static func hash(_ url: URL, offset: UInt64, size: UInt64) throws -> String {
