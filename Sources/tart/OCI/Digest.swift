@@ -7,6 +7,8 @@ enum DigestError: Error {
 }
 
 class Digest {
+  private static let fileBufferSize = 4 * 1024 * 1024
+
   var hash: SHA256 = SHA256()
 
   func update(_ data: Data) {
@@ -22,7 +24,10 @@ class Digest {
   }
 
   static func hash(_ url: URL) throws -> String {
-    hash(try Data(contentsOf: url))
+    let file = try FileHandle(forReadingFrom: url)
+    defer { try? file.close() }
+
+    return try hashContents(from: file)
   }
 
   static func hash(_ url: URL, offset: UInt64, size: UInt64) throws -> String {
@@ -36,20 +41,53 @@ class Digest {
       throw DigestError.InvalidOffset
     }
 
-    if (offset + size) > fileSize {
+    if size > fileSize - offset {
       throw DigestError.InvalidSize
     }
 
-    // Read a chunk of size ``size`` at offset ``offset``
-    // and calculate it's digest
+    // Read the requested range incrementally and calculate its digest.
     let fh = try FileHandle(forReadingFrom: url)
-    defer { try! fh.close() }
+    defer { try? fh.close() }
 
     try fh.seek(toOffset: offset)
 
-    let data = try fh.read(upToCount: Int(size))!
+    return try hashContents(from: fh, size: size)
+  }
 
-    return hash(data)
+  /// Streams a file into SHA-256 while keeping Foundation's temporary read
+  /// buffers scoped to one chunk.
+  private static func hashContents(from file: FileHandle, size: UInt64? = nil) throws -> String {
+    let digest = Digest()
+    var remaining = size
+
+    while remaining.map({ $0 > 0 }) ?? true {
+      let didRead = try autoreleasepool { () throws -> Bool in
+        let count = remaining.map {
+          Int(min(UInt64(fileBufferSize), $0))
+        } ?? fileBufferSize
+
+        guard let data = try file.read(upToCount: count), !data.isEmpty else {
+          if remaining != nil {
+            throw DigestError.InvalidSize
+          }
+
+          return false
+        }
+
+        digest.update(data)
+        if let bytesRemaining = remaining {
+          remaining = bytesRemaining - UInt64(data.count)
+        }
+
+        return true
+      }
+
+      if !didRead {
+        break
+      }
+    }
+
+    return digest.finalize()
   }
 }
 
