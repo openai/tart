@@ -830,9 +830,10 @@ private struct CachedImagePrunable: Prunable {
 
   func delete() throws {
     try vmDir.delete()
-    // Deleting a record can make attributed content unreferenced. Run GC now
-    // so one prune invocation reclaims those bytes.
-    try VMStorageOCI().gcContent()
+    // Deleting a record can leave tag symlinks broken and make attributed
+    // content unreferenced. Run the complete GC now so one prune invocation
+    // reclaims both kinds of garbage.
+    try VMStorageOCI().gc()
   }
 
   func accessDate() throws -> Date {

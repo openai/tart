@@ -72,12 +72,6 @@ struct Prune: AsyncParsableCommand {
     if let spaceBudget = spaceBudget {
       try Prune.pruneSpaceBudget(prunableStorages: prunableStorages, spaceBudgetBytes: UInt64(spaceBudget) * 1024 * 1024 * 1024)
     }
-
-    // Pruning digest-addressed OCI images can leave their tag symlinks broken.
-    // Run garbage collection after deletion so it can remove those links.
-    if entries == "caches" && (olderThan != nil || spaceBudget != nil) {
-      try VMStorageOCI().gc()
-    }
   }
 
   static func pruneOlderThan(prunableStorages: [PrunableStorage], olderThanDate: Date) throws {
