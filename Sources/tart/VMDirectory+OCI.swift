@@ -114,7 +114,7 @@ extension VMDirectory {
 
   /// Reconstructs one complete immutable base disk or published ASIF overlay
   /// from its Tart disk chunks, unless the shared content store already has a
-  /// verified copy.
+  /// size-matching copy.
   private func pullDiskFile(
     registry: Registry,
     group: TartDiskFileGroup,
@@ -133,7 +133,10 @@ extension VMDirectory {
     try lock.lock()
     defer { try? lock.unlock() }
 
-    if let existingURL = try contentStore.existingContentURL(for: contentDigest) {
+    if let existingURL = try contentStore.contentURLIfPresent(for: contentDigest),
+       let actualSize = UInt64(exactly: try existingURL.sizeBytes()),
+       let expectedSize = group.uncompressedSize(),
+       actualSize == expectedSize {
       progress.completedUnitCount += group.chunks.reduce(0) { $0 + Int64($1.size) }
       return existingURL
     }
@@ -189,7 +192,6 @@ extension VMDirectory {
     var annotations = diskAnnotations
     annotations[uploadTimeAnnotation] = Date().toISO()
     manifest.annotations = annotations
-
     // Manifest
     for reference in references {
       defaultLogger.appendNewLine("pushing manifest for \(reference)...")
@@ -228,6 +230,15 @@ extension VMDirectory {
     }
 
     let localManifest = try OCIManifest(fromJSON: Data(contentsOf: manifestURL))
+    // pushToRegistry() reads config.json before reaching this point. Closing
+    // that read descriptor can release the caller's fcntl PID lock, so take a
+    // fresh lock before hashing, uploading, and inspecting the writable overlay.
+    let stackedDiskLock = try lock()
+    guard try stackedDiskLock.trylock() else {
+      throw RuntimeError.VMIsRunning(name)
+    }
+    defer { try? stackedDiskLock.unlock() }
+
     let inheritedGroups: [TartDiskFileGroup]
     switch try localManifest.tartDiskRepresentation() {
     case .flat(let base) where base.contentDigest != nil:
@@ -250,26 +261,13 @@ extension VMDirectory {
       ))
     }
 
-    // Keep the snapshot out of startup GC while this potentially long push
-    // hashes, uploads, and inspects it.
-    let frozenOverlayDirectory = try VMDirectory.temporary()
-    let frozenOverlayLock = try FileLock(lockURL: frozenOverlayDirectory.baseURL)
-    try frozenOverlayLock.lock()
-    defer {
-      try? frozenOverlayLock.unlock()
-      try? FileManager.default.removeItem(at: frozenOverlayDirectory.baseURL)
-    }
-
-    let frozenOverlayURL = frozenOverlayDirectory.baseURL.appendingPathComponent("overlay.asif")
-    try FileManager.default.copyItem(at: overlayURL, to: frozenOverlayURL)
-
-    let overlaySize = try FileManager.default.attributesOfItem(atPath: frozenOverlayURL.path)[.size] as! Int64
+    let overlaySize = try FileManager.default.attributesOfItem(atPath: overlayURL.path)[.size] as! Int64
     defaultLogger.appendNewLine("pushing overlay...")
     let progress = Progress(totalUnitCount: overlaySize)
     ProgressObserver(progress).log(defaultLogger)
-    let contentDigest = try Digest.hash(frozenOverlayURL)
+    let contentDigest = try Digest.hash(overlayURL)
     let chunks = try await DiskV2.push(
-      diskURL: frozenOverlayURL,
+      diskURL: overlayURL,
       mediaType: asifOverlayMediaType,
       registry: registry,
       chunkSizeMb: chunkSizeMb,
@@ -278,7 +276,7 @@ extension VMDirectory {
     )
     layers.append(contentsOf: annotatedChunks(chunks, kind: .asifOverlay, contentDigest: contentDigest))
 
-    let blockLayout = try DiskImageStack.diskImageBlockLayout(at: frozenOverlayURL)
+    let blockLayout = try DiskImageStack.diskImageBlockLayout(at: overlayURL)
     let diskSize = blockLayout.blockSize.multipliedReportingOverflow(by: blockLayout.blockCount)
     guard !diskSize.overflow else {
       throw DiskImageStackError.invalidBlockLayout("stacked disk block layout overflows UInt64")
@@ -316,6 +314,8 @@ extension VMDirectory {
       return group.chunks
     }
 
+    // Rebuilding transport blobs republishes this file under the pinned
+    // whole-file digest, so validate the cached bytes at this boundary.
     guard let contentURL = try contentStore.existingContentURL(for: contentDigest) else {
       throw RuntimeError.VMMissingFiles("stacked VM is missing cached disk content \(contentDigest)")
     }

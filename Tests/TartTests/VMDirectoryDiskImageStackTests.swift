@@ -79,7 +79,37 @@ import XCTest
       XCTAssertTrue(FileManager.default.fileExists(atPath: fresh.overlayURL.path))
     }
 
-    func testResizeDiskGrowsWritableOverlay() throws {
+    func testStackedRemoteAdditionalDiskRetainsTemporaryVM() throws {
+      try withTemporaryTartHome {
+        let source = try flatSource()
+        let stacked = try temporaryVMDirectory()
+        try source.cloneAsStackedBase(to: stacked, generateMAC: false)
+
+        let storage = try VMStorageOCI()
+        let name = try RemoteName("example.com/org/image:latest")
+        let cachedImage = try storage.create(name)
+        try FileManager.default.copyItem(at: stacked.configURL, to: cachedImage.configURL)
+        try FileManager.default.copyItem(at: stacked.nvramURL, to: cachedImage.nvramURL)
+        try FileManager.default.copyItem(at: stacked.manifestURL, to: cachedImage.manifestURL)
+
+        do {
+          let additionalDisk = try AdditionalDisk(parseFrom: name.description)
+          let entries = try temporaryEntries()
+          XCTAssertEqual(entries.count, 1)
+          XCTAssertTrue(VMDirectory(baseURL: entries[0]).isStackedVM)
+
+          try Config().gc()
+          XCTAssertEqual(try temporaryEntries(), entries)
+
+          withExtendedLifetime(additionalDisk) {}
+        }
+
+        try Config().gc()
+        XCTAssertTrue(try temporaryEntries().isEmpty)
+      }
+    }
+
+    func testResizeDiskGrowsWritableOverlayAndPreservesParentGeometry() throws {
       let contentStore = try temporaryContentStore()
       let source = try flatSource()
       let stacked = try temporaryVMDirectory()

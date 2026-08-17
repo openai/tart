@@ -35,6 +35,8 @@ final class VMStorageOCITests: XCTestCase {
 
       XCTAssertTrue(try storage.hasUsableCachedImageForClone(name))
       XCTAssertFalse(try storage.hasUsableCachedImageForClone(name, requireManifest: true))
+      XCTAssertTrue(try storage.hasCompleteCachedImage(name, manifest: manifest))
+      XCTAssertFalse(try storage.hasCompleteCachedImage(name, manifest: manifest, requireManifest: true))
     }
   }
 

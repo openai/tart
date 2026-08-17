@@ -236,17 +236,29 @@ struct VMDirectory: Prunable {
     contentStore: ContentStore? = nil
   ) throws {
     if isStackedVM {
-      guard try state() == .Stopped else {
+      // Resolve the stack before taking the config.json PID lock. Reading
+      // config.json after acquiring an fcntl lock would release that lock
+      // when the read file descriptor is closed.
+      let stack = try diskImageStack(contentStore: contentStore)
+      let lock = try lock()
+      guard try lock.trylock() else {
+        throw RuntimeError.VMConfigurationError("VM \"\(name)\" must be stopped before resizing its disk")
+      }
+      defer { try? lock.unlock() }
+
+      // Holding the PID lock proves that the VM is not running. A saved state
+      // file is the remaining suspended state that must also reject resize.
+      guard !FileManager.default.fileExists(atPath: stateURL.path) else {
         throw RuntimeError.VMConfigurationError("VM \"\(name)\" must be stopped before resizing its disk")
       }
 
-      let stack = try diskImageStack(contentStore: contentStore)
       let desiredSizeBytes = UInt64(sizeGB) * 1000 * 1000 * 1000
       guard desiredSizeBytes.isMultiple(of: stack.blockSize) else {
         throw RuntimeError.InvalidDiskSize("new disk size must align to the stacked disk block size")
       }
 
-      try stack.growWritableOverlay(toBlockCount: desiredSizeBytes / stack.blockSize)
+      let desiredBlockCount = desiredSizeBytes / stack.blockSize
+      try stack.growWritableOverlay(toBlockCount: desiredBlockCount)
       return
     }
 

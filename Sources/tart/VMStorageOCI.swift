@@ -56,8 +56,17 @@ class VMStorageOCI: PrunableStorage {
   /// repairing it. Standalone images keep Tart's existing structural cache-hit
   /// behavior; stacked cached images additionally need every immutable disk file in
   /// the shared content store.
-  func hasCompleteCachedImage(_ name: RemoteName, manifest: OCIManifest) throws -> Bool {
+  func hasCompleteCachedImage(
+    _ name: RemoteName,
+    manifest: OCIManifest,
+    requireManifest: Bool = false
+  ) throws -> Bool {
     guard exists(name) else {
+      return false
+    }
+
+    let vmDir = VMDirectory(baseURL: vmURL(name))
+    if requireManifest && !FileManager.default.fileExists(atPath: vmDir.manifestURL.path) {
       return false
     }
 
@@ -71,12 +80,17 @@ class VMStorageOCI: PrunableStorage {
   /// The lock-free pull fast path is only useful for a tag that already
   /// points at this digest. New or retargeted tags validate once after taking
   /// the host lock instead of hashing a large stack twice.
-  func hasCompleteLinkedImage(_ name: RemoteName, digestName: RemoteName, manifest: OCIManifest) throws -> Bool {
+  func hasCompleteLinkedImage(
+    _ name: RemoteName,
+    digestName: RemoteName,
+    manifest: OCIManifest,
+    requireManifest: Bool = false
+  ) throws -> Bool {
     guard exists(name), linked(from: name, to: digestName) else {
       return false
     }
 
-    return try hasCompleteCachedImage(digestName, manifest: manifest)
+    return try hasCompleteCachedImage(digestName, manifest: manifest, requireManifest: requireManifest)
   }
 
   /// Bytes that this pull may need to materialize locally. For stacked images
@@ -361,7 +375,14 @@ class VMStorageOCI: PrunableStorage {
     return result
   }
 
-  func pull(_ name: RemoteName, registry: Registry, concurrency: UInt, deduplicate: Bool) async throws {
+  func pull(
+    _ name: RemoteName,
+    registry: Registry,
+    concurrency: UInt,
+    deduplicate: Bool,
+    requireManifest: Bool = false,
+    resolvedManifest: (manifest: OCIManifest, data: Data)? = nil
+  ) async throws {
     OpenTelemetry.instance.contextProvider.activeSpan?.setAttribute(
       key: "oci.image-name",
       value: .string(name.description)
@@ -369,12 +390,23 @@ class VMStorageOCI: PrunableStorage {
 
     defaultLogger.appendNewLine("pulling manifest...")
 
-    let (manifest, manifestData) = try await registry.pullManifest(reference: name.reference.value)
+    let (manifest, manifestData): (OCIManifest, Data)
+    if let resolvedManifest {
+      manifest = resolvedManifest.manifest
+      manifestData = resolvedManifest.data
+    } else {
+      (manifest, manifestData) = try await registry.pullManifest(reference: name.reference.value)
+    }
 
     let digestName = RemoteName(host: name.host, namespace: name.namespace,
                                 reference: Reference(digest: Digest.hash(manifestData)))
 
-    if try hasCompleteLinkedImage(name, digestName: digestName, manifest: manifest) {
+    if try hasCompleteLinkedImage(
+      name,
+      digestName: digestName,
+      manifest: manifest,
+      requireManifest: requireManifest
+    ) {
       // optimistically check if we need to do anything at all before locking
       defaultLogger.appendNewLine("\(digestName) image is already cached and linked!")
       return
@@ -398,12 +430,21 @@ class VMStorageOCI: PrunableStorage {
       throw CancellationError()
     }
 
-    if try !hasCompleteCachedImage(digestName, manifest: manifest) {
+    let digestVMDir = VMDirectory(baseURL: vmURL(digestName))
+    if requireManifest,
+       !FileManager.default.fileExists(atPath: digestVMDir.manifestURL.path),
+       try hasCompleteCachedImage(digestName, manifest: manifest) {
+      // Old Tart versions cached standalone OCI images without manifest.json.
+      // A stacked clone needs the manifest to describe its immutable base, but
+      // the existing disk remains usable and must not be downloaded again.
+      try manifestData.write(to: digestVMDir.manifestURL, options: .atomic)
+    }
+
+    if try !hasCompleteCachedImage(digestName, manifest: manifest, requireManifest: requireManifest) {
       let span = OTel.shared.tracer.spanBuilder(spanName: "pull").setActive(true).startSpan()
       defer { span.end() }
 
       let tmpVMDir = try VMDirectory.temporaryDeterministic(key: name.description)
-      let digestVMDir = VMDirectory(baseURL: vmURL(digestName))
       let preserveExplicitlyPulledMark = digestVMDir.isExplicitlyPulled()
 
       // Open an existing VM directory corresponding to this name, if any,

@@ -56,15 +56,37 @@ struct Clone: AsyncParsableCommand {
       guard remoteName != nil else {
         throw ValidationError("--stacked requires a remote image")
       }
+      try DiskImageStack.requireSupport()
     }
 
     if let remoteName, try !ociStorage.hasUsableCachedImageForClone(remoteName, requireManifest: stacked) {
       // Pull the VM in case it's OCI-based and doesn't exist locally yet
       let registry = try Registry(host: remoteName.host, namespace: remoteName.namespace, insecure: insecure)
-      try await ociStorage.pull(remoteName, registry: registry, concurrency: concurrency, deduplicate: deduplicate)
+      var resolvedManifest: (manifest: OCIManifest, data: Data)?
+
+      // Fail before pulling disk content when this host cannot create a writable stacked disk.
+      if !stacked {
+        let (manifest, manifestData) = try await registry.pullManifest(reference: remoteName.reference.value)
+        if manifest.layers.contains(where: { $0.mediaType == asifOverlayMediaType }) {
+          try DiskImageStack.requireSupport()
+        }
+        resolvedManifest = (manifest, manifestData)
+      }
+
+      try await ociStorage.pull(
+        remoteName,
+        registry: registry,
+        concurrency: concurrency,
+        deduplicate: deduplicate,
+        requireManifest: stacked,
+        resolvedManifest: resolvedManifest
+      )
     }
 
     let sourceVM = try VMStorageHelper.open(sourceName)
+    if sourceVM.isStackedVM || sourceVM.isStackedCachedImage {
+      try DiskImageStack.requireSupport()
+    }
     let tmpVMDir = try VMDirectory.temporary()
 
     // Lock the temporary VM directory to prevent it's garbage collection
@@ -126,7 +148,7 @@ struct Clone: AsyncParsableCommand {
         }
       }
     }, onCancel: {
-      try? FileManager.default.removeItem(at: tmpVMDir.baseURL)
+      try? tmpVMDir.removeFromDisk()
     })
   }
 }
