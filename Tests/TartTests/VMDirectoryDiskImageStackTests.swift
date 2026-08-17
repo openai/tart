@@ -90,6 +90,128 @@ import XCTest
       let image = try DiskImage(opening: .open(url: stacked.overlayURL, mode: .readOnly))
       XCTAssertEqual(image.blockCount, 1_000_000_000 / 512)
       XCTAssertEqual(try stacked.diskSizeBytes(), 1_000_000_000)
+
+      let manifest = try OCIManifest(fromJSON: Data(contentsOf: stacked.manifestURL))
+      XCTAssertEqual(manifest.diskBlockSize(), 512)
+      XCTAssertEqual(manifest.diskBlockCount(), 8)
+
+      _ = try stacked.diskImageStack(contentStore: contentStore).makeAttachment()
+    }
+
+    func testStackedArchiveRoundTripsImmutableContentAndOverlay() throws {
+      try withTemporaryTartHome {
+        let source = try flatSource()
+        let stacked = try temporaryVMDirectory()
+        try source.cloneAsStackedBase(to: stacked, generateMAC: false)
+
+        let contentDigest = try Digest.hash(source.diskURL)
+        let contentStore = try ContentStore()
+        let archivedOverlayDigest = try Digest.hash(stacked.overlayURL)
+        let archiveURL = try temporaryDirectory().appendingPathComponent("stacked.tvm")
+        try stacked.exportToArchive(path: archiveURL.path)
+
+        let cachedBaseURL = try XCTUnwrap(try contentStore.existingContentURL(for: contentDigest))
+        // Import must repair a corrupt cache entry from the valid archive
+        // instead of discarding the archive copy as an apparent cache hit.
+        try Data("corrupt".utf8).write(to: cachedBaseURL)
+        XCTAssertNil(try contentStore.existingContentURL(for: contentDigest))
+
+        let imported = try temporaryVMDirectory()
+        try imported.importFromArchive(path: archiveURL.path)
+
+        XCTAssertTrue(imported.isStackedVM)
+        XCTAssertEqual(try Digest.hash(imported.overlayURL), archivedOverlayDigest)
+        XCTAssertNotNil(try contentStore.existingContentURL(for: contentDigest))
+        _ = try imported.diskImageStack().makeAttachment()
+      }
+    }
+
+    func testStackedArchiveRejectsCorruptImmutableContent() throws {
+      try withTemporaryTartHome {
+        let source = try flatSource()
+        let stacked = try temporaryVMDirectory()
+        try source.cloneAsStackedBase(to: stacked, generateMAC: false)
+
+        let contentDigest = try Digest.hash(source.diskURL)
+        let contentStore = try ContentStore()
+        let cachedBaseURL = try XCTUnwrap(try contentStore.contentURLIfPresent(for: contentDigest))
+        try Data("corrupt".utf8).write(to: cachedBaseURL)
+
+        let archiveURL = try temporaryDirectory().appendingPathComponent("stacked.tvm")
+        XCTAssertThrowsError(try stacked.exportToArchive(path: archiveURL.path)) { error in
+          guard case RuntimeError.ExportFailed(let message) = error else {
+            return XCTFail("unexpected error: \(error)")
+          }
+          XCTAssertEqual(message, "VM is missing cached disk content \(contentDigest)")
+        }
+      }
+    }
+
+    func testStackedOCIArchiveSurvivesConcurrentRecordDeletion() throws {
+      try withTemporaryTartHome {
+        let source = try flatSource()
+        let stacked = try temporaryVMDirectory()
+        try source.cloneAsStackedBase(to: stacked, generateMAC: false)
+
+        let manifest = try OCIManifest(fromJSON: Data(contentsOf: stacked.manifestURL))
+        let storage = try VMStorageOCI()
+        let record = try storage.create(RemoteName(
+          host: "example.com",
+          namespace: "org/image",
+          reference: Reference(digest: try manifest.digest())
+        ))
+        try FileManager.default.copyItem(at: stacked.configURL, to: record.configURL)
+        try FileManager.default.copyItem(at: stacked.nvramURL, to: record.nvramURL)
+        try FileManager.default.copyItem(at: stacked.manifestURL, to: record.manifestURL)
+        XCTAssertTrue(record.isStackedCachedImage)
+
+        let archiveURL = try temporaryDirectory().appendingPathComponent("stacked-race.tvm")
+        let contentStore = try ContentStore()
+        let lockHeld = DispatchSemaphore(value: 0)
+        let releaseLock = DispatchSemaphore(value: 0)
+        let exportStarted = DispatchSemaphore(value: 0)
+        let exportFinished = DispatchSemaphore(value: 0)
+        let deletionStarted = DispatchSemaphore(value: 0)
+        let deletionFinished = DispatchSemaphore(value: 0)
+
+        DispatchQueue.global().async {
+          try? contentStore.withPruneLock {
+            lockHeld.signal()
+            releaseLock.wait()
+          }
+        }
+        XCTAssertEqual(lockHeld.wait(timeout: .now() + 1), .success)
+
+        // Queue export first so it is the next prune-lock waiter, then queue
+        // deletion behind it. Export must finish staging everything it needs
+        // before deletion can remove the source cached image.
+        DispatchQueue.global().async {
+          exportStarted.signal()
+          try? record.exportToArchive(path: archiveURL.path)
+          exportFinished.signal()
+        }
+        XCTAssertEqual(exportStarted.wait(timeout: .now() + 1), .success)
+        Thread.sleep(forTimeInterval: 0.1)
+
+        DispatchQueue.global().async {
+          deletionStarted.signal()
+          try? record.delete()
+          deletionFinished.signal()
+        }
+        XCTAssertEqual(deletionStarted.wait(timeout: .now() + 1), .success)
+        XCTAssertEqual(exportFinished.wait(timeout: .now() + 0.1), .timedOut)
+        XCTAssertEqual(deletionFinished.wait(timeout: .now() + 0.1), .timedOut)
+
+        releaseLock.signal()
+        XCTAssertEqual(exportFinished.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(deletionFinished.wait(timeout: .now() + 5), .success)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: record.baseURL.path))
+
+        let imported = try temporaryVMDirectory()
+        try imported.importFromArchive(path: archiveURL.path)
+        XCTAssertTrue(imported.isStackedVM)
+        _ = try imported.diskImageStack().makeAttachment()
+      }
     }
 
     func testResolvesPublishedOverlayFromManifestAndCache() throws {
@@ -166,6 +288,28 @@ import XCTest
     private func temporaryContentStore() throws -> ContentStore {
       let url = try temporaryDirectory()
       return try ContentStore(baseURL: url)
+    }
+
+    private func temporaryEntries() throws -> [URL] {
+      try FileManager.default.contentsOfDirectory(
+        at: Config().tartTmpDir,
+        includingPropertiesForKeys: nil
+      )
+    }
+
+    private func withTemporaryTartHome(_ body: () throws -> Void) throws {
+      let home = try temporaryDirectory()
+      let previousHome = ProcessInfo.processInfo.environment["TART_HOME"]
+      setenv("TART_HOME", home.path, 1)
+      defer {
+        if let previousHome {
+          setenv("TART_HOME", previousHome, 1)
+        } else {
+          unsetenv("TART_HOME")
+        }
+      }
+
+      try body()
     }
 
     private func temporaryVMDirectory() throws -> VMDirectory {

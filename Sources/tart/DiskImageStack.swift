@@ -45,6 +45,22 @@ struct DiskImageStack {
   let blockSize: UInt64
   let blockCount: UInt64
 
+  static var isSupported: Bool {
+    #if canImport(DiskImageKit)
+      if #available(macOS 27.0, *) {
+        return true
+      }
+    #endif
+
+    return false
+  }
+
+  static func requireSupport() throws {
+    guard isSupported else {
+      throw DiskImageStackError.unavailable
+    }
+  }
+
   /// Reads a disk image's current block layout without resolving or validating a
   /// whole stack. This is used for the VM's private writable overlay, whose
   /// size may be newer than the pinned immutable parent manifest.
@@ -69,21 +85,7 @@ struct DiskImageStack {
     #if canImport(DiskImageKit)
       if #available(macOS 27.0, *) {
         let image = try DiskImage(opening: .open(url: url, mode: .readOnly))
-        let matchesFormat = switch expectedFormat {
-        case .raw:
-          image.format == .raw
-        case .asif:
-          image.format == .asif
-        }
-        guard matchesFormat else {
-          throw DiskImageStackError.invalidDiskImage(url, "base disk format does not match")
-        }
-        guard image.layerType == nil, image.parentUUID == nil else {
-          throw DiskImageStackError.invalidDiskImage(url, "base disk must not be an overlay")
-        }
-        if expectedFormat == .asif && image.layerUUID == nil {
-          throw DiskImageStackError.invalidDiskImage(url, "ASIF base disk is missing a UUID")
-        }
+        try validateBase(image, at: url, expectedFormat: expectedFormat)
 
         return DiskImageBlockLayout(
           blockSize: UInt64(image.blockSize.rawValue),
@@ -214,7 +216,7 @@ struct DiskImageStack {
       }
 
       let baseImage = try DiskImage(opening: .open(url: baseURL, mode: .readOnly))
-      try validateBase(baseImage, at: baseURL, expectedFormat: baseFormat)
+      try Self.validateBase(baseImage, at: baseURL, expectedFormat: baseFormat)
 
       var image = baseImage
 
@@ -239,7 +241,7 @@ struct DiskImageStack {
     }
 
     @available(macOS 27.0, *)
-    private func validateBase(
+    private static func validateBase(
       _ image: DiskImage,
       at url: URL,
       expectedFormat: DiskImageFormat

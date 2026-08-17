@@ -75,29 +75,39 @@ final class VMDirectoryLayoutTests: XCTestCase {
     )
   }
 
-  func testStackedExportIsRejected() throws {
+  func testStackedCachedImageAccountingUsesManifestBlockLayout() throws {
     let vmDir = try temporaryVMDirectory()
-    try touch(vmDir.configURL)
-    try touch(vmDir.nvramURL)
-    try touch(vmDir.manifestURL)
-    try touch(vmDir.overlayURL)
-    let archiveURL = vmDir.baseURL.appendingPathComponent("export.tvm")
 
-    XCTAssertThrowsError(try vmDir.exportToArchive(path: archiveURL.path)) { error in
-      guard case RuntimeError.ExportFailed(let message) = error else {
-        return XCTFail("unexpected error: \(error)")
-      }
-      XCTAssertEqual(message, "exporting stacked VMs is not supported yet")
+    try Data("config".utf8).write(to: vmDir.configURL)
+    try Data("nvram".utf8).write(to: vmDir.nvramURL)
+    try stackedManifest(blockSize: 512, blockCount: 8).toJSON().write(to: vmDir.manifestURL)
+
+    XCTAssertEqual(
+      try vmDir.sizeBytes(),
+      try vmDir.configURL.sizeBytes() + vmDir.nvramURL.sizeBytes()
+    )
+    XCTAssertEqual(
+      try vmDir.allocatedSizeBytes(),
+      try vmDir.configURL.allocatedSizeBytes() + vmDir.nvramURL.allocatedSizeBytes()
+    )
+    XCTAssertEqual(try vmDir.diskSizeBytes(), 4096)
+  }
+
+  func testStackedArchiveRequiresMacOS27() throws {
+    if #available(macOS 27.0, *) {
+      throw XCTSkip("macOS 26 compatibility test")
     }
-    XCTAssertFalse(FileManager.default.fileExists(atPath: archiveURL.path))
 
-    try FileManager.default.removeItem(at: vmDir.overlayURL)
-    XCTAssertTrue(vmDir.isStackedCachedImage)
+    let vmDir = try temporaryVMDirectory()
+    try Data("config".utf8).write(to: vmDir.configURL)
+    try Data("nvram".utf8).write(to: vmDir.nvramURL)
+    try Data("overlay".utf8).write(to: vmDir.overlayURL)
+    try stackedManifest(blockSize: 512, blockCount: 8).toJSON().write(to: vmDir.manifestURL)
+    let archiveURL = try temporaryVMDirectory().baseURL.appendingPathComponent("stacked.tvm")
     XCTAssertThrowsError(try vmDir.exportToArchive(path: archiveURL.path)) { error in
-      guard case RuntimeError.ExportFailed(let message) = error else {
+      guard case DiskImageStackError.unavailable = error else {
         return XCTFail("unexpected error: \(error)")
       }
-      XCTAssertEqual(message, "exporting stacked VMs is not supported yet")
     }
     XCTAssertFalse(FileManager.default.fileExists(atPath: archiveURL.path))
   }

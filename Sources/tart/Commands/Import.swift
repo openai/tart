@@ -21,6 +21,9 @@ struct Import: AsyncParsableCommand {
 
     // Create a temporary VM directory to which we will load the export file
     let tmpVMDir = try VMDirectory.temporary()
+    defer {
+      try? tmpVMDir.removeFromDisk()
+    }
 
     // Lock the temporary VM directory to prevent it's garbage collection
     // while we're running
@@ -30,10 +33,8 @@ struct Import: AsyncParsableCommand {
     // Populate the temporary VM directory with the export file contents
     print("importing...")
     try tmpVMDir.importFromArchive(path: path)
-
-    if tmpVMDir.isStackedVM || tmpVMDir.isStackedCachedImage {
-      try? FileManager.default.removeItem(at: tmpVMDir.baseURL)
-      throw RuntimeError.ImportFailed("importing stacked VMs is not supported yet")
+    guard tmpVMDir.initialized else {
+      throw RuntimeError.ImportFailed("archive does not contain a runnable VM")
     }
 
     try await withTaskCancellationHandler(operation: {
@@ -50,7 +51,7 @@ struct Import: AsyncParsableCommand {
 
       try lock.unlock()
     }, onCancel: {
-      try? FileManager.default.removeItem(at: tmpVMDir.baseURL)
+      try? tmpVMDir.removeFromDisk()
     })
   }
 }
