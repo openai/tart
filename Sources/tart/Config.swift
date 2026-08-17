@@ -33,7 +33,7 @@ struct Config {
         continue
       }
 
-      try FileManager.default.removeItem(at: entry)
+      try VMDirectory(baseURL: entry).removeFromDisk()
 
       try lock.unlock()
     }

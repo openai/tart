@@ -81,27 +81,34 @@ struct Prune: AsyncParsableCommand {
   }
 
   static func pruneSpaceBudget(prunableStorages: [PrunableStorage], spaceBudgetBytes: UInt64) throws {
-    let prunables: [Prunable] = try prunableStorages
-      .flatMap { try $0.prunables() }
-      .sorted { try $0.accessDate() > $1.accessDate() }
+    while true {
+      let prunables: [Prunable] = try prunableStorages
+        .flatMap { try $0.prunables() }
+        .sorted { try $0.accessDate() > $1.accessDate() }
 
-    var spaceBudgetBytes = spaceBudgetBytes
-    var prunablesToDelete: [Prunable] = []
+      var remainingBudgetBytes = spaceBudgetBytes
+      var prunableToDelete: Prunable?
 
-    for prunable in prunables {
-      let prunableSizeBytes = UInt64(try prunable.allocatedSizeBytes())
+      for prunable in prunables {
+        let prunableSizeBytes = UInt64(try prunable.allocatedSizeBytes())
 
-      if prunableSizeBytes <= spaceBudgetBytes {
-        // Don't mark for deletion as
-        // there's a budget available
-        spaceBudgetBytes -= prunableSizeBytes
-      } else {
-        // Mark for deletion
-        prunablesToDelete.append(prunable)
+        if prunableSizeBytes <= remainingBudgetBytes {
+          // Don't mark for deletion as there is budget available
+          remainingBudgetBytes -= prunableSizeBytes
+        } else {
+          prunableToDelete = prunable
+          break
+        }
       }
-    }
 
-    try prunablesToDelete.forEach { try $0.delete() }
+      guard let prunableToDelete else {
+        return
+      }
+
+      // Deleting one cached stacked image can change which remaining image
+      // owns shared immutable content. Rebuild before choosing another.
+      try prunableToDelete.delete()
+    }
   }
 
   static func reclaimIfNeeded(_ requiredBytes: UInt64, _ initiator: Prunable? = nil) throws {
@@ -145,33 +152,39 @@ struct Prune: AsyncParsableCommand {
     try Prune.reclaimIfPossible(requiredBytes - volumeAvailableCapacityCalculated, initiator)
   }
 
-  private static func reclaimIfPossible(_ reclaimBytes: UInt64, _ initiator: Prunable? = nil) throws {
+  static func reclaimIfPossible(_ reclaimBytes: UInt64, _ initiator: Prunable? = nil) throws {
     let span = OTel.shared.tracer.spanBuilder(spanName: "prune").startSpan()
     defer { span.end() }
 
     let prunableStorages: [PrunableStorage] = [try VMStorageOCI(), try IPSWCache()]
-    let prunables: [Prunable] = try prunableStorages
-      .flatMap { try $0.prunables() }
-      .sorted { try $0.accessDate() < $1.accessDate() }
+    let prunables = {
+      try prunableStorages
+        .flatMap { try $0.prunables() }
+        .sorted { try $0.accessDate() < $1.accessDate() }
+    }
 
     // Does it even make sense to start?
-    let cacheUsedBytes = try prunables.map { try $0.allocatedSizeBytes() }.reduce(0, +)
-    if cacheUsedBytes < reclaimBytes {
+    let initialPrunables = try prunables()
+    let initialCacheUsedBytes = try initialPrunables.map { try $0.allocatedSizeBytes() }.reduce(0, +)
+    guard let reclaimBytes = Int(exactly: reclaimBytes), initialCacheUsedBytes >= reclaimBytes else {
       return
     }
 
-    var cacheReclaimedBytes: Int = 0
+    let targetCacheUsedBytes = initialCacheUsedBytes - reclaimBytes
+    var currentCacheUsedBytes = initialCacheUsedBytes
+    let initiatorPath = initiator.map {
+      $0.url.resolvingSymlinksInPath().standardizedFileURL.path
+    }
 
-    var it = prunables.makeIterator()
-
-    while cacheReclaimedBytes <= reclaimBytes {
-      guard let prunable = it.next() else {
+    while currentCacheUsedBytes > targetCacheUsedBytes {
+      // Deleting one cached stacked image can transfer ownership of shared
+      // immutable content to another record without reclaiming those bytes.
+      // Rebuild the candidates after every deletion so automatic pruning
+      // measures the cache that remains rather than a stale ownership snapshot.
+      guard let prunable = try prunables().first(where: {
+        $0.url.resolvingSymlinksInPath().standardizedFileURL.path != initiatorPath
+      }) else {
         break
-      }
-
-      if prunable.url == initiator?.url.resolvingSymlinksInPath() {
-        // do not prune the initiator
-        continue
       }
 
       let allocatedSizeBytes = try prunable.allocatedSizeBytes()
@@ -179,12 +192,11 @@ struct Prune: AsyncParsableCommand {
       OpenTelemetry.instance.contextProvider.activeSpan?
         .addEvent(name: "Pruned \(allocatedSizeBytes) bytes for \(prunable.url.path)")
 
-      cacheReclaimedBytes += allocatedSizeBytes
-
       try prunable.delete()
+      currentCacheUsedBytes = try prunables().map { try $0.allocatedSizeBytes() }.reduce(0, +)
     }
 
     OpenTelemetry.instance.contextProvider.activeSpan?
-      .addEvent(name: "Reclaimed \(cacheReclaimedBytes) bytes")
+      .addEvent(name: "Reclaimed \(initialCacheUsedBytes - currentCacheUsedBytes) bytes")
   }
 }

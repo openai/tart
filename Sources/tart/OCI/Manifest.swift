@@ -37,6 +37,24 @@ struct TartDiskFileGroup: Equatable {
   /// Whole reconstructed-file digest. Existing flat manifests do not have
   /// this until a macOS 27 clone normalizes its local manifest copy.
   var contentDigest: String?
+
+  /// Expected size of the complete disk file reconstructed from these chunks.
+  func uncompressedSize() -> UInt64? {
+    var result: UInt64 = 0
+    for chunk in chunks {
+      guard let size = chunk.uncompressedSize() else {
+        return nil
+      }
+
+      let addition = result.addingReportingOverflow(size)
+      guard !addition.overflow else {
+        return nil
+      }
+      result = addition.partialValue
+    }
+
+    return result
+  }
 }
 
 enum TartDiskRepresentation: Equatable {
@@ -170,6 +188,16 @@ struct OCIManifest: Codable, Equatable {
     }
 
     return .stacked(base: base, overlays: overlays)
+  }
+
+  /// Returns content-store digests needed to reconstruct this disk stack.
+  func diskContentDigests() throws -> [String] {
+    switch try tartDiskRepresentation() {
+    case .flat(let base):
+      return base.contentDigest.map { [$0] } ?? []
+    case .stacked(let base, let overlays):
+      return ([base] + overlays).compactMap(\.contentDigest)
+    }
   }
 
   private func validateChunkMetadata(_ chunks: [OCIManifestLayer]) throws {

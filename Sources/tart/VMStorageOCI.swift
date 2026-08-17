@@ -22,9 +22,8 @@ class VMStorageOCI: PrunableStorage {
   }
 
   /// Whether clone can use a cached image without pulling. Standalone images keep
-  /// Tart's existing structural check. Stacked cached images cheaply require every
-  /// immutable file with its expected length; explicit pull remains the path
-  /// that hashes content and repairs same-sized corruption.
+  /// Tart's existing structural check. Stacked cached images require every
+  /// immutable file with its expected length.
   func hasUsableCachedImageForClone(_ name: RemoteName, requireManifest: Bool = false) throws -> Bool {
     guard exists(name) else {
       return false
@@ -45,25 +44,7 @@ class VMStorageOCI: PrunableStorage {
 
     let contentStore = try ContentStore()
     for group in [base] + overlays {
-      guard let contentDigest = group.contentDigest,
-            let contentURL = try contentStore.contentURLIfPresent(for: contentDigest) else {
-        return false
-      }
-
-      var expectedSize: UInt64 = 0
-      for chunk in group.chunks {
-        guard let uncompressedSize = chunk.uncompressedSize() else {
-          return false
-        }
-        let addition = expectedSize.addingReportingOverflow(uncompressedSize)
-        guard !addition.overflow else {
-          return false
-        }
-        expectedSize = addition.partialValue
-      }
-
-      guard let actualSize = UInt64(exactly: try contentURL.sizeBytes()),
-            actualSize == expectedSize else {
+      guard try hasUsableCachedDiskFile(group, contentStore: contentStore) else {
         return false
       }
     }
@@ -164,35 +145,44 @@ class VMStorageOCI: PrunableStorage {
 
     let vmDir = try create(name, overwrite: exists(name))
 
-    if source.isStackedVM {
-      guard case .stacked(_, let overlays) = try manifest.tartDiskRepresentation(),
-            let contentDigest = overlays.last?.contentDigest else {
-        throw RuntimeError.VMConfigurationError("pushed image is missing its writable ASIF overlay")
-      }
-
-      // The pushed top overlay becomes immutable in the cached image. Keep a
-      // semantic copy so later clones do not need to fetch it back.
-      let contentStore = try ContentStore()
-      if try contentStore.existingContentURL(for: contentDigest) == nil {
-        let temporaryURL = try contentStore.temporaryContentURL(for: contentDigest)
-        do {
-          try FileManager.default.copyItem(at: source.overlayURL, to: temporaryURL)
-          _ = try contentStore.install(temporaryURL, contentDigest: contentDigest)
-        } catch {
-          try? FileManager.default.removeItem(at: temporaryURL)
-          throw error
+    do {
+      if source.isStackedVM {
+        guard case .stacked(_, let overlays) = try manifest.tartDiskRepresentation(),
+              let contentDigest = overlays.last?.contentDigest else {
+          throw RuntimeError.VMConfigurationError("pushed image is missing its writable ASIF overlay")
         }
+
+        // The pushed top overlay becomes immutable in the cached image. Keep a
+        // semantic copy so later clones do not need to fetch it back.
+        let contentStore = try ContentStore()
+        try contentStore.withPruneLock {
+          try FileManager.default.copyItem(at: source.configURL, to: vmDir.configURL)
+          try FileManager.default.copyItem(at: source.nvramURL, to: vmDir.nvramURL)
+          // Publish the reference before installing the immutable top overlay,
+          // so reference-aware pruning cannot collect it in between.
+          try manifest.toJSON().write(to: vmDir.manifestURL)
+        }
+
+        if try contentStore.contentURLIfPresent(for: contentDigest) == nil {
+          let temporaryURL = try contentStore.temporaryContentURL(for: contentDigest)
+          do {
+            try FileManager.default.copyItem(at: source.overlayURL, to: temporaryURL)
+            _ = try contentStore.install(temporaryURL, contentDigest: contentDigest)
+          } catch {
+            try? FileManager.default.removeItem(at: temporaryURL)
+            throw error
+          }
+        }
+      } else {
+        try source.clone(to: vmDir, generateMAC: false)
+        // Keep the exact manifest Tart submitted so tag links and later pushes
+        // refer to the same digest-addressed cached image.
+        try manifest.toJSON().write(to: vmDir.manifestURL)
       }
-
-      try FileManager.default.copyItem(at: source.configURL, to: vmDir.configURL)
-      try FileManager.default.copyItem(at: source.nvramURL, to: vmDir.nvramURL)
-    } else {
-      try source.clone(to: vmDir, generateMAC: false)
+    } catch {
+      try? vmDir.removeFromDisk()
+      throw error
     }
-
-    // Keep the exact manifest Tart submitted so tag links and later pushes
-    // refer to the same digest-addressed cached image.
-    try manifest.toJSON().write(to: vmDir.manifestURL)
   }
 
   func move(_ name: RemoteName, from: VMDirectory) throws{
@@ -203,11 +193,20 @@ class VMStorageOCI: PrunableStorage {
     try FileManager.default.createDirectory(at: targetURL.deletingLastPathComponent(),
                                             withIntermediateDirectories: true)
 
-    _ = try FileManager.default.replaceItemAt(targetURL, withItemAt: from.baseURL)
+    let target = VMDirectory(baseURL: targetURL)
+    if FileManager.default.fileExists(atPath: from.manifestURL.path) ||
+      FileManager.default.fileExists(atPath: target.manifestURL.path) {
+      let contentStore = try ContentStore()
+      try contentStore.withPruneLock {
+        _ = try FileManager.default.replaceItemAt(targetURL, withItemAt: from.baseURL)
+      }
+    } else {
+      _ = try FileManager.default.replaceItemAt(targetURL, withItemAt: from.baseURL)
+    }
   }
 
   func delete(_ name: RemoteName) throws {
-    try FileManager.default.removeItem(at: vmURL(name))
+    try removeRecord(at: vmURL(name))
     try gc()
   }
 
@@ -216,6 +215,7 @@ class VMStorageOCI: PrunableStorage {
 
     guard let enumerator = FileManager.default.enumerator(at: baseURL,
                                                           includingPropertiesForKeys: [.isSymbolicLinkKey]) else {
+      try gcContent()
       return
     }
 
@@ -243,7 +243,28 @@ class VMStorageOCI: PrunableStorage {
       let vmDir = VMDirectory(baseURL: baseURL)
 
       if !vmDir.isExplicitlyPulled() && incRefCount == 0 {
-        try FileManager.default.removeItem(at: baseURL)
+        try removeRecord(at: baseURL)
+      }
+    }
+
+    try gcContent()
+  }
+
+  /// Cached images with a manifest publish references into the shared content
+  /// store. Remove them through VMDirectory so reference removal is serialized
+  /// with clone, export, pull, and content GC, even if a record is incomplete.
+  private func removeRecord(at url: URL) throws {
+    try VMDirectory(baseURL: url).removeFromDisk()
+  }
+
+  /// Remove immutable files whose final published or in-progress reference
+  /// has disappeared, without collecting unrelated cached images.
+  fileprivate func gcContent() throws {
+    let contentStore = try ContentStore()
+    try contentStore.withPruneLock {
+      let referencedContentDigests = try referencedContentDigests(includeCachedImages: true)
+      for contentURL in try contentStore.prunables(excluding: referencedContentDigests) {
+        try FileManager.default.removeItem(at: contentURL)
       }
     }
   }
@@ -287,9 +308,57 @@ class VMStorageOCI: PrunableStorage {
   }
 
   func prunables() throws -> [Prunable] {
-    try list().filter { (_, vmDir, isSymlink) in
-      !isSymlink && vmDir.isStandalone
+    let records = try list().filter { (_, _, isSymlink) in
+      !isSymlink
     }.map { (_, vmDir, _) in vmDir }
+
+    // Attribute shared content to the newest cached image that references it.
+    // This counts each file once while charging it to the last record that
+    // normally needs to be removed before the file becomes reclaimable.
+    let nonCacheContentDigests = try referencedContentDigests(includeCachedImages: false)
+    var contentOwners = [String: VMDirectory]()
+    for record in records where record.isStackedCachedImage {
+      // Interrupted cache population can leave a truncated manifest in an
+      // otherwise recognizable cached record. It has no reliable content
+      // references, but it must not prevent pruning other cache entries.
+      for contentDigest in (try? record.diskContentDigests()) ?? []
+        where !nonCacheContentDigests.contains(contentDigest) {
+        guard let currentOwner = contentOwners[contentDigest] else {
+          contentOwners[contentDigest] = record
+          continue
+        }
+
+        let recordAccessDate = try record.accessDate()
+        let currentAccessDate = try currentOwner.accessDate()
+        if recordAccessDate > currentAccessDate ||
+          (recordAccessDate == currentAccessDate && record.url.path > currentOwner.url.path) {
+          contentOwners[contentDigest] = record
+        }
+      }
+    }
+
+    let contentStore = try ContentStore()
+    var ownedContentURLs = [URL: [URL]]()
+    for (contentDigest, owner) in contentOwners {
+      let contentURL = try contentStore.contentURL(for: contentDigest)
+      guard FileManager.default.fileExists(atPath: contentURL.path) else {
+        continue
+      }
+
+      ownedContentURLs[owner.url, default: []].append(contentURL)
+    }
+
+    var result: [Prunable] = records.map { record in
+      CachedImagePrunable(
+        vmDir: record,
+        ownedContentURLs: ownedContentURLs[record.url] ?? []
+      )
+    }
+
+    result += try contentStore.prunables(excluding: referencedContentDigests(includeCachedImages: true))
+      .map(ContentPrunable.init)
+
+    return result
   }
 
   func pull(_ name: RemoteName, registry: Registry, concurrency: UInt, deduplicate: Bool) async throws {
@@ -344,6 +413,12 @@ class VMStorageOCI: PrunableStorage {
       // Lock the temporary VM directory to prevent it's garbage collection
       let tmpVMDirLock = try FileLock(lockURL: tmpVMDir.baseURL)
       try tmpVMDirLock.lock()
+
+      // Make in-progress stacked content references visible before reclaiming
+      // space or reconstructing immutable files.
+      try ContentStore().withPruneLock {
+        try manifestData.write(to: tmpVMDir.manifestURL)
+      }
 
       // A previously pulled standalone image already has the complete base
       // disk locally as disk.img. Promote that file into the content store
@@ -402,16 +477,13 @@ class VMStorageOCI: PrunableStorage {
           return .throw
         }
 
-        // Preserve the exact manifest bytes received from the registry. Its
-        // digest identifies this cached image and stacked VMs pin it.
-        try manifestData.write(to: tmpVMDir.manifestURL)
         if preserveExplicitlyPulledMark {
           tmpVMDir.markExplicitlyPulled()
         }
 
         try move(digestName, from: tmpVMDir)
       }, onCancel: {
-        try? FileManager.default.removeItem(at: tmpVMDir.baseURL)
+        try? tmpVMDir.removeFromDisk()
       })
     } else {
       defaultLogger.appendNewLine("\(digestName) image is already cached! creating a symlink...")
@@ -430,9 +502,10 @@ class VMStorageOCI: PrunableStorage {
     _ = try VMStorageOCI().open(name)
   }
 
-  /// Returns `nil` for standalone images and the missing immutable disk-file groups
-  /// for stacked images. `ContentStore.existingContentURL()` intentionally
-  /// validates the digest so corrupt entries are repaired by a normal pull.
+  /// Returns nil for standalone images and the missing immutable disk-file
+  /// groups for stacked images. Like existing standalone cached images, cache hits trust
+  /// already-installed files; checking size still repairs truncated entries
+  /// without hashing a large prewarmed base on every pull.
   private func missingStackedDiskFileGroups(for manifest: OCIManifest) throws -> [TartDiskFileGroup]? {
     guard case .stacked(let base, let overlays) = try manifest.tartDiskRepresentation() else {
       return nil
@@ -441,10 +514,7 @@ class VMStorageOCI: PrunableStorage {
     let contentStore = try ContentStore()
     var missingGroups: [TartDiskFileGroup] = []
     for group in [base] + overlays {
-      guard let contentDigest = group.contentDigest else {
-        throw OCIManifestValidationError.invalidDiskMetadata("stacked disk files need a whole-file content digest")
-      }
-      if try contentStore.existingContentURL(for: contentDigest) == nil {
+      if try !hasUsableCachedDiskFile(group, contentStore: contentStore) {
         missingGroups.append(group)
       }
     }
@@ -462,23 +532,47 @@ class VMStorageOCI: PrunableStorage {
     }
 
     let contentStore = try ContentStore()
-    // Content-store entries are verified when installed. Avoid hashing a
-    // potentially large prewarmed base again on every stacked pull.
-    guard try contentStore.contentURLIfPresent(for: contentDigest) == nil else {
-      return
-    }
+    var attemptedCandidates = Swift.Set<String>()
+    while true {
+      // Keep the source record alive only while cloning its disk. The pull's
+      // in-progress manifest already protects the destination content digest,
+      // so hashing and installing the staged clone need not hold the global
+      // prune lock.
+      let temporaryURL = try contentStore.withPruneLock { () -> URL? in
+        // Content-store entries are verified when installed. Avoid hashing a
+        // potentially large prewarmed base again on every stacked pull.
+        guard try contentStore.contentURLIfPresent(for: contentDigest) == nil else {
+          return nil
+        }
 
-    for (_, vmDir, isSymlink) in try list() where !isSymlink && vmDir.isStandalone {
-      guard let manifestData = try? Data(contentsOf: vmDir.manifestURL),
-            let candidateManifest = try? OCIManifest(fromJSON: manifestData),
-            case .flat(let candidateBase) = try? candidateManifest.tartDiskRepresentation(),
-            diskChunksMatch(candidateBase.chunks, base.chunks) else {
-        continue
+        for (_, vmDir, isSymlink) in try list() where !isSymlink && vmDir.isStandalone {
+          guard !attemptedCandidates.contains(vmDir.baseURL.path),
+                let manifestData = try? Data(contentsOf: vmDir.manifestURL),
+                let candidateManifest = try? OCIManifest(fromJSON: manifestData),
+                case .flat(let candidateBase) = try? candidateManifest.tartDiskRepresentation(),
+                diskChunksMatch(candidateBase.chunks, base.chunks) else {
+            continue
+          }
+
+          attemptedCandidates.insert(vmDir.baseURL.path)
+          let temporaryURL = try contentStore.temporaryContentURL(for: contentDigest)
+          do {
+            try FileManager.default.copyItem(at: vmDir.diskURL, to: temporaryURL)
+            return temporaryURL
+          } catch {
+            try? FileManager.default.removeItem(at: temporaryURL)
+            throw error
+          }
+        }
+
+        return nil
       }
 
-      let temporaryURL = try contentStore.temporaryContentURL(for: contentDigest)
+      guard let temporaryURL else {
+        return
+      }
+
       do {
-        try FileManager.default.copyItem(at: vmDir.diskURL, to: temporaryURL)
         _ = try contentStore.install(temporaryURL, contentDigest: contentDigest)
         return
       } catch ContentStoreError.contentDigestMismatch {
@@ -506,6 +600,17 @@ class VMStorageOCI: PrunableStorage {
     }
   }
 
+  private func hasUsableCachedDiskFile(_ group: TartDiskFileGroup, contentStore: ContentStore) throws -> Bool {
+    guard let contentDigest = group.contentDigest,
+          let contentURL = try contentStore.contentURLIfPresent(for: contentDigest),
+          let actualSize = UInt64(exactly: try contentURL.sizeBytes()),
+          let expectedSize = group.uncompressedSize() else {
+      return false
+    }
+
+    return actualSize == expectedSize
+  }
+
   func linked(from: RemoteName, to: RemoteName) -> Bool {
     do {
       let resolvedFrom = try FileManager.default.destinationOfSymbolicLink(atPath: vmURL(from).path)
@@ -516,9 +621,13 @@ class VMStorageOCI: PrunableStorage {
   }
 
   func link(from: RemoteName, to: RemoteName) throws {
-    try? FileManager.default.removeItem(at: vmURL(from))
-
-    try FileManager.default.createSymbolicLink(at: vmURL(from), withDestinationURL: vmURL(to))
+    // Export resolves mutable tags while holding this same lock, so replace
+    // the symlink atomically with respect to stacked archive staging.
+    let contentStore = try ContentStore()
+    try contentStore.withPruneLock {
+      try? FileManager.default.removeItem(at: vmURL(from))
+      try FileManager.default.createSymbolicLink(at: vmURL(from), withDestinationURL: vmURL(to))
+    }
 
     try gc()
   }
@@ -593,6 +702,108 @@ class VMStorageOCI: PrunableStorage {
     return try choosen.flatMap({ choosen in
       try LocalLayerCache(choosen.name, choosen.deduplicatedBytes, choosen.vmDir.diskURL, choosen.manifest)
     })
+  }
+
+  /// Returns content referenced outside the OCI cache, optionally including
+  /// references published by retained cached images.
+  private func referencedContentDigests(includeCachedImages: Bool) throws -> Swift.Set<String> {
+    var result = Swift.Set<String>()
+
+    for (_, vmDir) in try VMStorageLocal().list() where vmDir.isStackedVM {
+      result.formUnion(try vmDir.diskContentDigests())
+    }
+
+    // Clone, pull, and import publish their manifest before installing
+    // immutable content. Include partially populated temporary directories so
+    // pruning cannot race those operations.
+    for url in try FileManager.default.contentsOfDirectory(
+      at: Config().tartTmpDir,
+      includingPropertiesForKeys: [],
+      options: .skipsHiddenFiles
+    ) {
+      let vmDir = VMDirectory(baseURL: url)
+      guard FileManager.default.fileExists(atPath: vmDir.manifestURL.path),
+            let contentDigests = try? vmDir.diskContentDigests() else {
+        continue
+      }
+
+      result.formUnion(contentDigests)
+    }
+
+    if includeCachedImages {
+      for (_, vmDir, isSymlink) in try list() where !isSymlink && vmDir.isStackedCachedImage {
+        // Malformed cached records are invalid references. Keep scanning so
+        // one interrupted population does not disable content GC globally.
+        if let contentDigests = try? vmDir.diskContentDigests() {
+          result.formUnion(contentDigests)
+        }
+      }
+    }
+
+    return result
+  }
+
+  fileprivate func deleteContentIfUnused(_ url: URL) throws {
+    let contentStore = try ContentStore()
+    try contentStore.withPruneLock {
+      let referencedContentDigests = try referencedContentDigests(includeCachedImages: true)
+      let stillPrunable = try contentStore.prunables(excluding: referencedContentDigests).contains {
+        $0.resolvingSymlinksInPath() == url.resolvingSymlinksInPath()
+      }
+      if stillPrunable {
+        try FileManager.default.removeItem(at: url)
+      }
+    }
+  }
+}
+
+private struct ContentPrunable: Prunable {
+  let url: URL
+
+  func delete() throws {
+    try VMStorageOCI().deleteContentIfUnused(url)
+  }
+
+  func accessDate() throws -> Date {
+    try url.accessDate()
+  }
+
+  func sizeBytes() throws -> Int {
+    try url.sizeBytes()
+  }
+
+  func allocatedSizeBytes() throws -> Int {
+    try url.allocatedSizeBytes()
+  }
+}
+
+/// A digest-addressed cached image plus immutable content attributed to the
+/// final remote reference that can release it.
+private struct CachedImagePrunable: Prunable {
+  let vmDir: VMDirectory
+  let ownedContentURLs: [URL]
+
+  var url: URL {
+    vmDir.url
+  }
+
+  func delete() throws {
+    try vmDir.delete()
+    // Deleting a record can make attributed content unreferenced. Run GC now
+    // so one prune invocation reclaims those bytes.
+    try VMStorageOCI().gcContent()
+  }
+
+  func accessDate() throws -> Date {
+    try vmDir.accessDate()
+  }
+
+  func sizeBytes() throws -> Int {
+    try vmDir.sizeBytes() + ownedContentURLs.map { try $0.sizeBytes() }.reduce(0, +)
+  }
+
+  func allocatedSizeBytes() throws -> Int {
+    try vmDir.allocatedSizeBytes() + ownedContentURLs.map { try $0.allocatedSizeBytes() }.reduce(0, +)
   }
 }
 

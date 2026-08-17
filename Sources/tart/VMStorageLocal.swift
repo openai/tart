@@ -35,11 +35,27 @@ class VMStorageLocal: PrunableStorage {
 
   func move(_ name: String, from: VMDirectory) throws {
     _ = try FileManager.default.createDirectory(at: baseURL, withIntermediateDirectories: true)
-    _ = try FileManager.default.replaceItemAt(vmURL(name), withItemAt: from.baseURL)
+    try replace(VMDirectory(baseURL: vmURL(name)), with: from)
   }
 
   func rename(_ name: String, _ newName: String) throws {
-    _ = try FileManager.default.replaceItemAt(vmURL(newName), withItemAt: vmURL(name))
+    let source = VMDirectory(baseURL: vmURL(name))
+    let destination = VMDirectory(baseURL: vmURL(newName))
+    try replace(destination, with: source)
+  }
+
+  /// References in a manifest must not disappear while content GC is deciding
+  /// whether their immutable disk files are still in use.
+  private func replace(_ destination: VMDirectory, with source: VMDirectory) throws {
+    if FileManager.default.fileExists(atPath: source.manifestURL.path) ||
+      FileManager.default.fileExists(atPath: destination.manifestURL.path) {
+      let contentStore = try ContentStore()
+      try contentStore.withPruneLock {
+        _ = try FileManager.default.replaceItemAt(destination.baseURL, withItemAt: source.baseURL)
+      }
+    } else {
+      _ = try FileManager.default.replaceItemAt(destination.baseURL, withItemAt: source.baseURL)
+    }
   }
 
   func delete(_ name: String) throws {

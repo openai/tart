@@ -4,6 +4,23 @@ import XCTest
 @testable import tart
 
 final class CommandBehaviorTests: XCTestCase {
+  func testStandaloneDeleteDoesNotInitializeContentStore() throws {
+    try withTemporaryTartHome {
+      let vmDir = try VMStorageLocal().create("standalone")
+      try config().save(toURL: vmDir.configURL)
+      XCTAssertTrue(FileManager.default.createFile(atPath: vmDir.nvramURL.path, contents: Data()))
+      XCTAssertTrue(FileManager.default.createFile(atPath: vmDir.diskURL.path, contents: Data()))
+
+      let contentStoreURL = try Config().tartCacheDir.appendingPathComponent("content", isDirectory: true)
+      XCTAssertFalse(FileManager.default.fileExists(atPath: contentStoreURL.path))
+
+      try vmDir.delete()
+
+      XCTAssertFalse(FileManager.default.fileExists(atPath: vmDir.baseURL.path))
+      XCTAssertFalse(FileManager.default.fileExists(atPath: contentStoreURL.path))
+    }
+  }
+
   func testSetDiskRejectsStackedVMBeforeSavingConfig() async throws {
     try await withTemporaryTartHome {
       let vmDir = try VMStorageLocal().create("stacked")

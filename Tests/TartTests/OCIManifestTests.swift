@@ -21,6 +21,33 @@ final class OCIManifestTests: XCTestCase {
     ))
   }
 
+  func testDiskFileGroupUncompressedSize() {
+    let first = chunk(mediaType: diskV2MediaType, suffix: "base-0")
+    let second = chunk(mediaType: diskV2MediaType, suffix: "base-1")
+    XCTAssertEqual(TartDiskFileGroup(kind: .base, chunks: [first, second], contentDigest: nil).uncompressedSize(), 2)
+
+    var overflowing = first
+    overflowing.annotations?[uncompressedSizeAnnotation] = String(UInt64.max)
+    XCTAssertNil(TartDiskFileGroup(kind: .base, chunks: [overflowing, second], contentDigest: nil).uncompressedSize())
+  }
+
+  func testDiskContentDigests() throws {
+    let flatBase = chunk(mediaType: diskV2MediaType, suffix: "flat", diskFileDigest: "sha256:flat")
+    XCTAssertEqual(try manifest(diskDescriptors: [flatBase]).diskContentDigests(), ["sha256:flat"])
+
+    let stackedBase = chunk(mediaType: diskV2MediaType, suffix: "base", diskFileDigest: "sha256:base")
+    let overlay = chunk(
+      mediaType: asifOverlayMediaType,
+      suffix: "overlay",
+      diskFileDigest: "sha256:overlay",
+      chunkCount: 1
+    )
+    XCTAssertEqual(
+      try manifest(diskDescriptors: [stackedBase, overlay]).diskContentDigests(),
+      ["sha256:base", "sha256:overlay"]
+    )
+  }
+
   func testStackedRepresentationRequiresBaseDigest() throws {
     let base = chunk(mediaType: diskV2MediaType, suffix: "base-0")
     let overlay = chunk(mediaType: asifOverlayMediaType, suffix: "overlay-0", diskFileDigest: "sha256:overlay", chunkCount: 1)

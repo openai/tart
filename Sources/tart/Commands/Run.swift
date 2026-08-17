@@ -1039,20 +1039,24 @@ struct AdditionalDisk {
         // A cached stacked image has no writable top overlay. Create one in a
         // disposable directory for this additional-disk attachment.
         let temporaryVMDir = try VMDirectory.temporary()
-        try FileManager.default.copyItem(at: vmDir.configURL, to: temporaryVMDir.configURL)
-        try FileManager.default.copyItem(at: vmDir.nvramURL, to: temporaryVMDir.nvramURL)
-        try FileManager.default.copyItem(at: vmDir.manifestURL, to: temporaryVMDir.manifestURL)
-        let lock = try FileLock(lockURL: temporaryVMDir.baseURL)
-        try lock.lock()
+        let temporaryVMDirLock = try FileLock(lockURL: temporaryVMDir.baseURL)
+        try temporaryVMDirLock.lock()
+        try vmDir.cloneStacked(
+          to: temporaryVMDir,
+          copyWritableOverlay: false,
+          generateMAC: false
+        )
         let stack = try temporaryVMDir.diskImageStack()
-        try stack.createWritableOverlay()
         let attachment = try stack.makeAttachment(
           readOnly: diskReadOnly,
           cachingMode: try VZDiskImageCachingMode(cachingModeRaw) ?? .automatic,
           synchronizationMode: try VZDiskImageSynchronizationMode(syncModeRaw)
         )
 
-        return AdditionalDisk(configuration: VZVirtioBlockDeviceConfiguration(attachment: attachment), temporaryDiskLock: lock)
+        return AdditionalDisk(
+          configuration: VZVirtioBlockDeviceConfiguration(attachment: attachment),
+          temporaryDiskLock: temporaryVMDirLock
+        )
       }
 
       // Unfortunately, VZDiskImageStorageDeviceAttachment does not support

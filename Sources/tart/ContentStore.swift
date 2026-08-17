@@ -16,6 +16,7 @@ struct ContentStore {
 
   let baseURL: URL
   private let digestDirectoryURL: URL
+  private let pruneLockURL: URL
 
   init() throws {
     try self.init(baseURL: Config().tartCacheDir.appendingPathComponent("content", isDirectory: true))
@@ -24,13 +25,41 @@ struct ContentStore {
   init(baseURL: URL) throws {
     self.baseURL = baseURL
     self.digestDirectoryURL = baseURL.appendingPathComponent(Self.digestAlgorithm, isDirectory: true)
+    self.pruneLockURL = baseURL.appendingPathComponent(".gc.lock")
     try FileManager.default.createDirectory(at: digestDirectoryURL, withIntermediateDirectories: true)
+    if !FileManager.default.fileExists(atPath: pruneLockURL.path) {
+      _ = FileManager.default.createFile(atPath: pruneLockURL.path, contents: Data())
+    }
+  }
+
+  /// Serializes reference publication with the final reference check and
+  /// deletion of immutable cache entries across Tart processes.
+  func withPruneLock<T>(_ body: () throws -> T) throws -> T {
+    let lock = try FileLock(lockURL: pruneLockURL)
+    try lock.lock()
+    defer { try? lock.unlock() }
+
+    return try body()
+  }
+
+  /// Waits for any prune already scanning references to finish. After this
+  /// returns, later prune runs can see a reference the caller already wrote.
+  func synchronizePublishedReferences() throws {
+    try withPruneLock {}
   }
 
   func contentURL(for contentDigest: String) throws -> URL {
+    try contentURL(for: contentDigest, under: baseURL)
+  }
+
+  /// Returns the canonical path for a digest under an arbitrary content-store
+  /// root without creating directories or lock files.
+  func contentURL(for contentDigest: String, under baseURL: URL) throws -> URL {
     let digestHex = try validatedDigestHex(contentDigest)
 
-    return digestDirectoryURL.appendingPathComponent(digestHex)
+    return baseURL
+      .appendingPathComponent(Self.digestAlgorithm, isDirectory: true)
+      .appendingPathComponent(digestHex)
   }
 
   func temporaryContentURL(for contentDigest: String) throws -> URL {
@@ -61,15 +90,17 @@ struct ContentStore {
     return lockURL
   }
 
-  /// Returns a digest-addressed entry without rereading it. Pull verifies
-  /// content hashes before accepting a cache hit; clone only needs a cheap
-  /// structural check, like Tart's existing disk.img path.
+  /// Returns an immutable digest-addressed entry without rereading it. Files
+  /// are verified when installed and when deciding whether a pull is a cache
+  /// hit; normal clone/run/push paths trust the store like Tart's disk.img.
   func contentURLIfPresent(for contentDigest: String) throws -> URL? {
     let url = try contentURL(for: contentDigest)
 
     guard FileManager.default.fileExists(atPath: url.path) else {
       return nil
     }
+
+    try url.updateAccessDate()
 
     return url
   }
@@ -86,6 +117,33 @@ struct ContentStore {
     }
 
     return url
+  }
+
+  /// Returns immutable content files that no retained cached image or local VM
+  /// references. Callers may prune these like other cache entries.
+  func prunables(excluding referencedContentDigests: Swift.Set<String>) throws -> [URL] {
+    guard let enumerator = FileManager.default.enumerator(
+      at: digestDirectoryURL,
+      includingPropertiesForKeys: [.isRegularFileKey],
+      options: [.skipsSubdirectoryDescendants]
+    ) else {
+      return []
+    }
+
+    return try enumerator.compactMap { element in
+      guard let url = element as? URL,
+            try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
+        return nil
+      }
+
+      let contentDigest = "\(Self.digestPrefix)\(url.lastPathComponent)"
+      guard (try? validatedDigestHex(contentDigest)) != nil,
+            !referencedContentDigests.contains(contentDigest) else {
+        return nil
+      }
+
+      return url
+    }
   }
 
   /// Move a fully reconstructed temporary file into the cache after verifying

@@ -31,6 +31,7 @@ final class ContentStoreTests: XCTestCase {
     try Data("corrupt".utf8).write(to: contentURL)
 
     XCTAssertNil(try store.existingContentURL(for: expectedDigest))
+    XCTAssertEqual(try store.contentURLIfPresent(for: expectedDigest), contentURL)
   }
 
   func testResumableAndLockURLsAreStablePerDigest() throws {
@@ -111,6 +112,24 @@ final class ContentStoreTests: XCTestCase {
     XCTAssertThrowsError(try store.contentURL(for: "sha256:ABC")) { error in
       XCTAssertEqual(error as? ContentStoreError, .invalidContentDigest("sha256:ABC"))
     }
+  }
+
+  func testContentURLUnderArbitraryRootHasNoSideEffects() throws {
+    let rootURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    addTeardownBlock {
+      try? FileManager.default.removeItem(at: rootURL)
+    }
+    let digest = Digest.hash(Data("content".utf8))
+
+    let contentStore = try temporaryStore()
+    let contentURL = try contentStore.contentURL(for: digest, under: rootURL)
+
+    XCTAssertEqual(
+      contentURL,
+      rootURL.appendingPathComponent("sha256", isDirectory: true)
+        .appendingPathComponent(String(digest.dropFirst("sha256:".count)))
+    )
+    XCTAssertFalse(FileManager.default.fileExists(atPath: rootURL.path))
   }
 
   private func temporaryStore() throws -> ContentStore {

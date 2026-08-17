@@ -1,6 +1,12 @@
 import Foundation
 
 extension VMDirectory {
+  /// Returns content-store digests needed to reconstruct this VM's disk stack.
+  func diskContentDigests() throws -> [String] {
+    let manifest = try OCIManifest(fromJSON: Data(contentsOf: manifestURL))
+    return try manifest.diskContentDigests()
+  }
+
   func diskImageStack(contentStore providedStore: ContentStore? = nil) throws -> DiskImageStack {
     let manifest = try OCIManifest(fromJSON: Data(contentsOf: manifestURL))
     let base: TartDiskFileGroup
@@ -42,13 +48,18 @@ extension VMDirectory {
     generateMAC: Bool,
     contentStore: ContentStore? = nil
   ) throws {
-    try FileManager.default.copyItem(at: configURL, to: destination.configURL)
-    try FileManager.default.copyItem(at: nvramURL, to: destination.nvramURL)
-    try FileManager.default.copyItem(at: manifestURL, to: destination.manifestURL)
+    let contentStore = try contentStore ?? ContentStore()
+    try contentStore.withPruneLock {
+      try FileManager.default.copyItem(at: configURL, to: destination.configURL)
+      try FileManager.default.copyItem(at: nvramURL, to: destination.nvramURL)
+      try FileManager.default.copyItem(at: manifestURL, to: destination.manifestURL)
 
-    if copyWritableOverlay {
-      try FileManager.default.copyItem(at: overlayURL, to: destination.overlayURL)
-    } else {
+      if copyWritableOverlay {
+        try FileManager.default.copyItem(at: overlayURL, to: destination.overlayURL)
+      }
+    }
+
+    if !copyWritableOverlay {
       try destination.diskImageStack(contentStore: contentStore).createWritableOverlay()
     }
 
@@ -66,17 +77,6 @@ extension VMDirectory {
     let blockLayout = try DiskImageStack.baseBlockLayout(at: diskURL, expectedFormat: config.diskFormat)
     let contentDigest = try Digest.hash(diskURL)
     let contentStore = try providedStore ?? ContentStore()
-
-    if try contentStore.existingContentURL(for: contentDigest) == nil {
-      let temporaryURL = try contentStore.temporaryContentURL(for: contentDigest)
-      do {
-        try FileManager.default.copyItem(at: diskURL, to: temporaryURL)
-        _ = try contentStore.install(temporaryURL, contentDigest: contentDigest)
-      } catch {
-        try? FileManager.default.removeItem(at: temporaryURL)
-        throw error
-      }
-    }
 
     var manifest = try OCIManifest(fromJSON: Data(contentsOf: manifestURL))
     guard case .flat = try manifest.tartDiskRepresentation() else {
@@ -101,7 +101,24 @@ extension VMDirectory {
 
     try FileManager.default.copyItem(at: configURL, to: destination.configURL)
     try FileManager.default.copyItem(at: nvramURL, to: destination.nvramURL)
-    try manifest.toJSON().write(to: destination.manifestURL)
+    try contentStore.withPruneLock {
+      try manifest.toJSON().write(to: destination.manifestURL)
+    }
+
+    // Publish the temporary VM's manifest before installing the shared base.
+    // Reference-aware pruning includes in-progress manifests, so the content
+    // cannot be collected in the window before this VM is moved into place.
+    if try contentStore.contentURLIfPresent(for: contentDigest) == nil {
+      let temporaryURL = try contentStore.temporaryContentURL(for: contentDigest)
+      do {
+        try FileManager.default.copyItem(at: diskURL, to: temporaryURL)
+        _ = try contentStore.install(temporaryURL, contentDigest: contentDigest)
+      } catch {
+        try? FileManager.default.removeItem(at: temporaryURL)
+        throw error
+      }
+    }
+
     try destination.diskImageStack(contentStore: contentStore).createWritableOverlay()
 
     if generateMAC {

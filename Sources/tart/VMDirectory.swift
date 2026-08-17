@@ -373,9 +373,25 @@ struct VMDirectory: Prunable {
       throw RuntimeError.VMIsRunning(name)
     }
 
-    try FileManager.default.removeItem(at: baseURL)
+    // Standalone local VMs do not reference the shared content store. Delete
+    // them directly so a full disk can still be recovered before the content
+    // store has ever been initialized.
+    if isStandalone {
+      try FileManager.default.removeItem(at: baseURL)
+    } else {
+      try removeFromDisk()
+    }
 
     try lock.unlock()
+  }
+
+  /// Removes a VM directory while preserving the content-store reference
+  /// protocol for any complete or partially published manifest it contains.
+  func removeFromDisk() throws {
+    let contentStore = try ContentStore()
+    try contentStore.withPruneLock {
+      try FileManager.default.removeItem(at: baseURL)
+    }
   }
 
   func accessDate() throws -> Date {
