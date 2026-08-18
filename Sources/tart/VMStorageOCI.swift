@@ -271,6 +271,30 @@ class VMStorageOCI: PrunableStorage {
     try VMDirectory(baseURL: url).removeFromDisk()
   }
 
+  /// Remove tag links which now point to a cached image record that was deleted.
+  fileprivate func removeTagLinks(to deletedRecordURL: URL) throws {
+    let contentStore = try ContentStore()
+    try contentStore.withPruneLock {
+      guard let enumerator = FileManager.default.enumerator(at: baseURL,
+                                                            includingPropertiesForKeys: [.isSymbolicLinkKey]) else {
+        return
+      }
+
+      let deletedPath = deletedRecordURL.standardizedFileURL.path
+      for case let foundURL as URL in enumerator {
+        guard try foundURL.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink! else {
+          continue
+        }
+
+        let destination = try FileManager.default.destinationOfSymbolicLink(atPath: foundURL.path)
+        let destinationURL = URL(fileURLWithPath: destination, relativeTo: foundURL.deletingLastPathComponent())
+        if destinationURL.standardizedFileURL.path == deletedPath {
+          try FileManager.default.removeItem(at: foundURL)
+        }
+      }
+    }
+  }
+
   /// Remove immutable files whose final published or in-progress reference
   /// has disappeared, without collecting unrelated cached images.
   fileprivate func gcContent() throws {
@@ -830,10 +854,9 @@ private struct CachedImagePrunable: Prunable {
 
   func delete() throws {
     try vmDir.delete()
-    // Deleting a record can leave tag symlinks broken and make attributed
-    // content unreferenced. Run the complete GC now so one prune invocation
-    // reclaims both kinds of garbage.
-    try VMStorageOCI().gc()
+    let storage = try VMStorageOCI()
+    try storage.removeTagLinks(to: vmDir.url)
+    try storage.gcContent()
   }
 
   func accessDate() throws -> Date {

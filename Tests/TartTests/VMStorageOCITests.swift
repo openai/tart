@@ -730,6 +730,30 @@ final class VMStorageOCITests: XCTestCase {
     }
   }
 
+  func testPruningCachedImageRemovesOnlyItsTagSymlink() throws {
+    try withTemporaryTartHome {
+      let storage = try VMStorageOCI()
+      let deletedManifest = try stackedManifest(baseContentDigest: "sha256:deleted")
+      let retainedManifest = try stackedManifest(baseContentDigest: "sha256:retained")
+      let deletedName = try digestName(for: deletedManifest)
+      let deletedRecord = try createRecord(for: deletedManifest, in: storage)
+      let tagName = RemoteName(host: "example.com", namespace: "org/image", reference: Reference(tag: "deleted"))
+      let tagURL = storage.baseURL.appendingRemoteName(tagName)
+      try storage.link(from: tagName, to: deletedName)
+      let retainedRecord = try createRecord(for: retainedManifest, in: storage)
+      try deletedRecord.url.updateAccessDate(Date(timeIntervalSince1970: 1))
+
+      try Prune.pruneOlderThan(
+        prunableStorages: [storage],
+        olderThanDate: Date(timeIntervalSince1970: 2)
+      )
+
+      XCTAssertFalse(FileManager.default.fileExists(atPath: deletedRecord.url.path))
+      XCTAssertThrowsError(try FileManager.default.destinationOfSymbolicLink(atPath: tagURL.path))
+      XCTAssertTrue(FileManager.default.fileExists(atPath: retainedRecord.url.path))
+    }
+  }
+
   #if canImport(DiskImageKit)
     @available(macOS 27.0, *)
     func testPopulateStackedPushedImageCachesImmutableTopOverlay() throws {
