@@ -22,6 +22,32 @@ You can also enable the debugging output to diagnose issues:
 go run cmd/main.go fio --debug
 ```
 
+To compare an empty Tart home with the same pull after its immutable base has
+been prewarmed, provide a standalone remote base image and a stacked image built
+from it. For example, create and push a stacked child of the public Tahoe base:
+
+```shell
+BASE_IMAGE=ghcr.io/cirruslabs/macos-tahoe-base:latest
+STACKED_IMAGE=ghcr.io/your-org/macos-tahoe-stacked:latest
+
+tart clone --stacked "$BASE_IMAGE" macos-tahoe-stacked
+tart push macos-tahoe-stacked "$STACKED_IMAGE"
+```
+
+Then benchmark that pair:
+
+```shell
+go run cmd/main.go stacked-oci \
+  --base-image "$BASE_IMAGE" \
+  --image "$STACKED_IMAGE"
+```
+
+The command first performs an unmeasured pull to warm registry, CDN, and
+filesystem caches. It then uses disposable `TART_HOME` directories for both
+measured scenarios. The prewarmed scenario keeps the VM created by
+`tart clone --stacked` alive while pulling the child, so the shared immutable
+base layer remains referenced and available for reuse.
+
 ## Results
 
 ### Mar 27, 2024

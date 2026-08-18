@@ -265,3 +265,15 @@ tart clone acme.io/remoteorg/name:latest my-local-vm-name
 ```
 
 If the specified image is not already present, this invocation calls the `tart pull` implicitly before cloning.
+
+### Creating a Stacked Disk
+
+On macOS 27 or newer, use `--stacked` to create a VM that keeps a remote standalone
+macOS OCI image as an immutable base and stores only its own writes separately:
+
+```bash
+tart clone --stacked ghcr.io/cirruslabs/macos-tahoe-base my-local-vm-name
+```
+
+Pushing this VM preserves the disk relationship. Pulling another image from the
+same lineage reuses immutable disk files that are already in Tart's cache.

@@ -231,6 +231,28 @@ export TART_NO_AUTO_PRUNE=
 TART_NO_AUTO_PRUNE= tart pull ...
 ```
 
+## Stacked disk images
+
+On macOS 27 or newer, `tart clone --stacked` can create a VM from a remote,
+standalone macOS OCI image whose writes are stored in a private ASIF overlay while
+its source disk remains a shared read-only base:
+
+```shell
+tart clone --stacked ghcr.io/cirruslabs/macos-tahoe-base:latest macos-build
+```
+
+Running and pushing `macos-build` preserves that disk relationship. Pulling
+another image from the same lineage only downloads immutable disk files that
+are not already present in Tart's cache. For a stopped stacked VM,
+`tart set --disk-size` grows its private writable overlay without changing the
+base; a subsequent push records the new guest-visible disk size.
+
+`tart pull` can cache a stacked image without assembling its disk. Clone, run,
+import, and export require a Tart build with DiskImageKit support and macOS 27
+or newer. Existing standalone raw and ASIF images continue to work on older
+hosts. Keep published lineages shallow when possible: every additional parent
+overlay adds another ASIF file to validate and assemble at run time.
+
 ## Disk resizing
 
 Disk resizing works on most cloud-ready Linux distributions out-of-the box (e.g. Ubuntu Cloud Images have the `cloud-initramfs-growroot` package installed that runs on boot) and on the rest of the distributions by running the `growpart` or `resize2fs` commands.
