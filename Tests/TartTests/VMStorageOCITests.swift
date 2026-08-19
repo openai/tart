@@ -733,8 +733,15 @@ final class VMStorageOCITests: XCTestCase {
   func testPruningCachedImageRemovesOnlyItsTagSymlink() throws {
     try withTemporaryTartHome {
       let storage = try VMStorageOCI()
-      let deletedManifest = try stackedManifest(baseContentDigest: "sha256:deleted")
-      let retainedManifest = try stackedManifest(baseContentDigest: "sha256:retained")
+      // Content digests are validated when manifests are scanned for pruning.
+      // Use syntactically valid digests here; the test only exercises record
+      // and tag-symlink cleanup, not content installation.
+      let deletedManifest = try stackedManifest(
+        baseContentDigest: "sha256:" + String(repeating: "a", count: 64)
+      )
+      let retainedManifest = try stackedManifest(
+        baseContentDigest: "sha256:" + String(repeating: "b", count: 64)
+      )
       let deletedName = try digestName(for: deletedManifest)
       let deletedRecord = try createRecord(for: deletedManifest, in: storage)
       let tagName = RemoteName(host: "example.com", namespace: "org/image", reference: Reference(tag: "deleted"))
