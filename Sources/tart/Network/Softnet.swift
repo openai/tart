@@ -170,9 +170,9 @@ class Softnet: Network {
       throw SoftnetError.InitializationFailed(why: "\(sudoBinaryName) not found in PATH")
     }
 
-    var process = Process()
+    let process = Process()
     process.executableURL = sudoExecutableURL
-    process.arguments = ["--non-interactive", "softnet", "--help"]
+    process.arguments = ["--non-interactive", softnetExecutablePath, "--help"]
     process.standardInput = nil
     process.standardOutput = nil
     process.standardError = nil
@@ -187,24 +187,48 @@ class Softnet: Network {
     fputs("Softnet requires a Sudo password to set the SUID bit on the Softnet executable, please enter it below.\n",
           stderr)
 
-    process = try Process.run(sudoExecutableURL, arguments: [
-      "sh",
-      "-c",
-      "chown root \(softnetExecutablePath) && chmod u+s \(softnetExecutablePath)",
-    ])
+    try runInteractiveSudo(
+      executableURL: sudoExecutableURL,
+      arguments: ["chown", "root", softnetExecutablePath],
+      failureMessage: "failed to change ownership of Softnet executable with Sudo")
+
+    try runInteractiveSudo(
+      executableURL: sudoExecutableURL,
+      arguments: ["chmod", "u+s", softnetExecutablePath],
+      failureMessage: "failed to configure SUID bit on Softnet executable with Sudo")
+  }
+
+  private static func runInteractiveSudo(executableURL: URL, arguments: [String], failureMessage: String) throws {
+    let originalForegroundProcessGroup = tcgetpgrp(STDIN_FILENO)
+    if originalForegroundProcessGroup == -1 {
+      let details = Errno(rawValue: CInt(errno))
+
+      throw RuntimeError.SoftnetFailed("tcgetpgrp(2) failed: \(details)")
+    }
+
+    let process = try Process.run(executableURL, arguments: arguments)
 
     // Set TTY's foreground process group to that of the Sudo process,
     // otherwise it will get stopped by a SIGTTIN once user input arrives
-    if tcsetpgrp(STDIN_FILENO, process.processIdentifier) == -1 {
-      let details = Errno(rawValue: CInt(errno))
-
-      throw RuntimeError.SoftnetFailed("tcsetpgrp(2) failed: \(details)")
-    }
+    try setTerminalForegroundProcessGroup(process.processIdentifier)
 
     process.waitUntilExit()
 
+    try setTerminalForegroundProcessGroup(originalForegroundProcessGroup)
+
     if process.terminationStatus != 0 {
-      throw RuntimeError.SoftnetFailed("failed to configure SUID bit on Softnet executable with Sudo")
+      throw RuntimeError.SoftnetFailed(failureMessage)
+    }
+  }
+
+  private static func setTerminalForegroundProcessGroup(_ processGroup: pid_t) throws {
+    let previousSIGTTOUHandler = signal(SIGTTOU, SIG_IGN)
+    defer { _ = signal(SIGTTOU, previousSIGTTOUHandler) }
+
+    if tcsetpgrp(STDIN_FILENO, processGroup) == -1 {
+      let details = Errno(rawValue: CInt(errno))
+
+      throw RuntimeError.SoftnetFailed("tcsetpgrp(2) failed: \(details)")
     }
   }
 }
