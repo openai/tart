@@ -47,6 +47,15 @@ class VMStorageLocal: PrunableStorage {
   /// References in a manifest must not disappear while content GC is deciding
   /// whether their immutable disk files are still in use.
   private func replace(_ destination: VMDirectory, with source: VMDirectory) throws {
+    // Replacing a running VM's directory unlinks its locked config and disks,
+    // leaving a live VM that list and stop can no longer find by name.
+    let destinationLock = FileManager.default.fileExists(atPath: destination.configURL.path)
+      ? try destination.lock() : nil
+    if let destinationLock, try !destinationLock.trylock() {
+      throw RuntimeError.VMIsRunning(destination.name)
+    }
+    defer { withExtendedLifetime(destinationLock) {} }
+
     if FileManager.default.fileExists(atPath: source.manifestURL.path) ||
       FileManager.default.fileExists(atPath: destination.manifestURL.path) {
       let contentStore = try ContentStore()

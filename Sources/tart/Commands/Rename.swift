@@ -18,6 +18,9 @@ struct Rename: AsyncParsableCommand {
 
   func run() async throws {
     let localStorage = try VMStorageLocal()
+    let lock = try FileLock(lockURL: Config().tartHomeDir)
+    try lock.lock()
+    defer { withExtendedLifetime(lock) {} }
 
     if !localStorage.exists(name) {
       throw ValidationError("failed to rename a non-existent local VM: \(name)")

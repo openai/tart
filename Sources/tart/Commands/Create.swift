@@ -74,6 +74,10 @@ struct Create: AsyncParsableCommand {
         _ = try await VM.linux(vmDir: tmpVMDir, diskSizeGB: diskSize, diskFormat: diskFormat)
       }
 
+      // Publish under the same lock that run holds while opening VM files.
+      let storageLock = try FileLock(lockURL: Config().tartHomeDir)
+      try storageLock.lock()
+      defer { withExtendedLifetime(storageLock) {} }
       try VMStorageLocal().move(name, from: tmpVMDir)
     }, onCancel: {
       try? FileManager.default.removeItem(at: tmpVMDir.baseURL)
