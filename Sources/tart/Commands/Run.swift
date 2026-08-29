@@ -250,6 +250,24 @@ struct Run: AsyncParsableCommand {
   @Flag(help: ArgumentHelp("Restrict network access to the host-only network"))
   var netHost: Bool = false
 
+  #if compiler(>=6.4)
+    @Option(help: ArgumentHelp(
+      "Use native vmnet shared networking with an explicit IPv4 subnet (e.g. --net-vmnet-subnet=192.168.200.0/24)",
+      discussion: """
+      Creates an independent NAT network and assigns the guest an address from the requested subnet.
+      This is useful when VPN or TUN software needs to route Tart traffic separately from other virtualization products.
+
+      The CIDR must be canonical, fully contained in RFC 1918 private address space, and leave at least
+      one assignable guest address (prefix length at most /30). The first, second and last addresses
+      are reserved by vmnet.
+
+      Requires the host to be running macOS 26 (or newer).
+      """,
+      valueName: "CIDR"
+    ))
+    var netVmnetSubnet: String?
+  #endif
+
   @Option(help: ArgumentHelp("Set the root disk options (e.g. --root-disk-opts=\"ro\" or --root-disk-opts=\"caching=cached,sync=none\")",
                              discussion: """
                              Options are comma-separated and are as follows:
@@ -324,14 +342,35 @@ struct Run: AsyncParsableCommand {
       netSoftnet = true
     }
 
+    #if compiler(>=6.4)
+      if let netVmnetSubnet {
+        if #unavailable(macOS 26) {
+          throw ValidationError("--net-vmnet-subnet requires the host to be running macOS 26 (or newer)")
+        }
+
+        do {
+          _ = try IPv4Subnet(netVmnetSubnet)
+        } catch {
+          throw ValidationError("\(error)")
+        }
+      }
+    #endif
+
     // Check that no more than one network option is specified
     var netFlags = 0
     if netBridged.count > 0 { netFlags += 1 }
     if netSoftnet { netFlags += 1 }
     if netHost { netFlags += 1 }
+    #if compiler(>=6.4)
+      if netVmnetSubnet != nil { netFlags += 1 }
+    #endif
 
     if netFlags > 1 {
-      throw ValidationError("--net-bridged, --net-softnet and --net-host are mutually exclusive")
+      #if compiler(>=6.4)
+        throw ValidationError("--net-bridged, --net-softnet, --net-host and --net-vmnet-subnet are mutually exclusive")
+      #else
+        throw ValidationError("--net-bridged, --net-softnet and --net-host are mutually exclusive")
+      #endif
     }
 
     if graphics && noGraphics {
@@ -691,6 +730,16 @@ struct Run: AsyncParsableCommand {
     if let netSoftnetExpose = netSoftnetExpose {
       softnetExtraArguments += ["--expose", netSoftnetExpose]
     }
+
+    #if compiler(>=6.4)
+      if let netVmnetSubnet {
+        guard #available(macOS 26, *) else {
+          throw ValidationError("--net-vmnet-subnet requires the host to be running macOS 26 (or newer)")
+        }
+
+        return try NetworkVmnet(subnet: IPv4Subnet(netVmnetSubnet))
+      }
+    #endif
 
     if netSoftnet {
       let config = try VMConfig.init(fromURL: vmDir.configURL)
