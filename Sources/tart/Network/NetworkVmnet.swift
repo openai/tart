@@ -32,15 +32,15 @@ import Virtualization
       }
 
       let address = UInt32(bigEndian: parsedAddress.s_addr)
-      let subnetMask = UInt32.max << (32 - parsedPrefixLength)
-      let networkAddress = address & subnetMask
+      let parsedSubnetMask = UInt32.max << (32 - parsedPrefixLength)
+      let networkAddress = address & parsedSubnetMask
       let canonical = "\(Self.addressString(networkAddress))/\(parsedPrefixLength)"
 
       guard address == networkAddress else {
         throw IPv4SubnetError.invalid(rawValue, why: "network address is not canonical; use \(canonical)")
       }
 
-      let broadcastAddress = networkAddress | ~subnetMask
+      let broadcastAddress = networkAddress | ~parsedSubnetMask
       guard let networkPrivateRange = Self.privateRange(containing: networkAddress),
             networkPrivateRange == Self.privateRange(containing: broadcastAddress)
       else {
@@ -55,15 +55,23 @@ import Virtualization
       Self.addressString(networkAddress + 1)
     }
 
+    var subnetMask: UInt32 {
+      UInt32.max << (32 - Int(prefixLength))
+    }
+
     var subnetMaskDescription: String {
-      Self.addressString(UInt32.max << (32 - Int(prefixLength)))
+      Self.addressString(subnetMask)
     }
 
     var description: String {
       "\(Self.addressString(networkAddress))/\(prefixLength)"
     }
 
-    private static func addressString(_ address: UInt32) -> String {
+    func matches(address: UInt32, mask: UInt32) -> Bool {
+      mask == subnetMask && (address & mask) == networkAddress
+    }
+
+    static func addressString(_ address: UInt32) -> String {
       "\((address >> 24) & 0xff).\((address >> 16) & 0xff).\((address >> 8) & 0xff).\(address & 0xff)"
     }
 
@@ -122,6 +130,20 @@ import Virtualization
         throw NetworkVmnetError.networkCreationFailed(subnet: subnet, status: status)
       }
 
+      var actualAddress = in_addr()
+      var actualMask = in_addr()
+      vmnet_network_get_ipv4_subnet(network, &actualAddress, &actualMask)
+
+      let actualAddressValue = UInt32(bigEndian: actualAddress.s_addr)
+      let actualMaskValue = UInt32(bigEndian: actualMask.s_addr)
+      guard subnet.matches(address: actualAddressValue, mask: actualMaskValue) else {
+        throw NetworkVmnetError.unexpectedSubnet(
+          requested: subnet,
+          actualAddress: actualAddressValue,
+          actualMask: actualMaskValue
+        )
+      }
+
       self.network = network
     }
 
@@ -144,6 +166,7 @@ import Virtualization
     case invalidGeneratedAddress(subnet: IPv4Subnet)
     case subnetConfigurationFailed(subnet: IPv4Subnet, status: vmnet_return_t)
     case networkCreationFailed(subnet: IPv4Subnet, status: vmnet_return_t)
+    case unexpectedSubnet(requested: IPv4Subnet, actualAddress: UInt32, actualMask: UInt32)
 
     var description: String {
       switch self {
@@ -155,6 +178,10 @@ import Virtualization
         return "vmnet_network_configuration_set_ipv4_subnet(\(subnet)) failed with status \(status)"
       case .networkCreationFailed(let subnet, let status):
         return "vmnet_network_create(\(subnet)) failed with status \(status); make sure the subnet does not conflict with another active network"
+      case .unexpectedSubnet(let requested, let actualAddress, let actualMask):
+        let actualNetwork = IPv4Subnet.addressString(actualAddress & actualMask)
+        let actualMask = IPv4Subnet.addressString(actualMask)
+        return "vmnet created IPv4 network \(actualNetwork) with mask \(actualMask) instead of requested subnet \(requested)"
       }
     }
   }
