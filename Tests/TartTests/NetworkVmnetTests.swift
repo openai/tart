@@ -24,6 +24,15 @@ import XCTest
       XCTAssertEqual(subnet.subnetMaskDescription, "255.255.255.252")
     }
 
+    func testMatchesReturnedNetworkOrGatewayAddress() throws {
+      let subnet = try IPv4Subnet("192.168.200.0/24")
+
+      XCTAssertTrue(subnet.matches(address: 0xc0a8_c800, mask: 0xffff_ff00))
+      XCTAssertTrue(subnet.matches(address: 0xc0a8_c801, mask: 0xffff_ff00))
+      XCTAssertFalse(subnet.matches(address: 0xc0a8_c900, mask: 0xffff_ff00))
+      XCTAssertFalse(subnet.matches(address: 0xc0a8_c800, mask: 0xffff_0000))
+    }
+
     func testRejectsNonCanonicalNetworkAddress() {
       XCTAssertThrowsError(try IPv4Subnet("192.168.200.1/24")) { error in
         XCTAssertTrue(String(describing: error).contains("use 192.168.200.0/24"))
