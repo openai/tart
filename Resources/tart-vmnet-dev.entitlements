@@ -4,6 +4,8 @@
 <dict>
 	<key>com.apple.security.virtualization</key>
 	<true/>
+	<key>com.apple.vm.networking</key>
+	<true/>
 	<key>com.apple.security.get-task-allow</key>
 	<true/>
 </dict>
