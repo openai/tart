@@ -7,7 +7,7 @@ import XCTest
       let subnet = try IPv4Subnet("192.168.200.0/24")
 
       XCTAssertEqual(subnet.description, "192.168.200.0/24")
-      XCTAssertEqual(subnet.gatewayAddressDescription, "192.168.200.1")
+      XCTAssertEqual(subnet.subnetAddressDescription, "192.168.200.0")
       XCTAssertEqual(subnet.subnetMaskDescription, "255.255.255.0")
     }
 
@@ -20,11 +20,11 @@ import XCTest
     func testAcceptsSmallestUsableSubnet() throws {
       let subnet = try IPv4Subnet("192.168.200.0/30")
 
-      XCTAssertEqual(subnet.gatewayAddressDescription, "192.168.200.1")
+      XCTAssertEqual(subnet.subnetAddressDescription, "192.168.200.0")
       XCTAssertEqual(subnet.subnetMaskDescription, "255.255.255.252")
     }
 
-    func testMatchesReturnedNetworkOrGatewayAddress() throws {
+    func testMatchesReturnedNetworkOrHostAddress() throws {
       let subnet = try IPv4Subnet("192.168.200.0/24")
 
       XCTAssertTrue(subnet.matches(address: 0xc0a8_c800, mask: 0xffff_ff00))
