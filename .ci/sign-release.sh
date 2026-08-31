@@ -5,16 +5,11 @@ set -eu
 APP_PATH="dist/tart_darwin_all/tart.app"
 
 if [ "${TART_RELEASE_SNAPSHOT:-false}" = "true" ]; then
-  # GitHub-hosted macOS terminates ad-hoc executables that carry the restricted
-  # vmnet entitlement. Verify the executable before signing, then verify the
-  # resulting app structurally below.
-  "$APP_PATH/Contents/MacOS/tart" --version
-
   codesign \
     --force \
     --deep \
     --sign - \
-    --entitlements Resources/tart-vmnet-dev.entitlements \
+    --entitlements Resources/tart-dev.entitlements \
     "$APP_PATH"
 else
   codesign \
@@ -29,11 +24,11 @@ else
 fi
 
 codesign --verify --strict --verbose=2 "$APP_PATH"
+"$APP_PATH/Contents/MacOS/tart" --version
 
 if [ "${TART_RELEASE_SNAPSHOT:-false}" != "true" ]; then
-  "$APP_PATH/Contents/MacOS/tart" --version
-
   NOTARIZATION_ARCHIVE="$RUNNER_TEMP/tart-notarization.zip"
+
   ditto -c -k --keepParent "$APP_PATH" "$NOTARIZATION_ARCHIVE"
   xcrun notarytool submit "$NOTARIZATION_ARCHIVE" \
     --keychain-profile "notarytool" \
