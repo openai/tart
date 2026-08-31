@@ -52,8 +52,8 @@ import Virtualization
       self.prefixLength = UInt8(parsedPrefixLength)
     }
 
-    var gatewayAddressDescription: String {
-      Self.addressString(networkAddress + 1)
+    var subnetAddressDescription: String {
+      Self.addressString(networkAddress)
     }
 
     var subnetMask: UInt32 {
@@ -116,15 +116,15 @@ import Virtualization
         throw NetworkVmnetError.configurationCreationFailed(status: status)
       }
 
-      var gatewayAddress = in_addr()
+      var subnetAddress = in_addr()
       var subnetMask = in_addr()
-      guard inet_pton(AF_INET, subnet.gatewayAddressDescription, &gatewayAddress) == 1,
+      guard inet_pton(AF_INET, subnet.subnetAddressDescription, &subnetAddress) == 1,
             inet_pton(AF_INET, subnet.subnetMaskDescription, &subnetMask) == 1
       else {
         throw NetworkVmnetError.invalidGeneratedAddress(subnet: subnet)
       }
 
-      let subnetStatus = vmnet_network_configuration_set_ipv4_subnet(configuration, &gatewayAddress, &subnetMask)
+      let subnetStatus = vmnet_network_configuration_set_ipv4_subnet(configuration, &subnetAddress, &subnetMask)
       guard subnetStatus == .VMNET_SUCCESS else {
         throw NetworkVmnetError.subnetConfigurationFailed(subnet: subnet, status: subnetStatus)
       }
@@ -197,7 +197,7 @@ import Virtualization
       case .configurationCreationFailed(let status):
         return "vmnet_network_configuration_create() failed with status \(status)"
       case .invalidGeneratedAddress(let subnet):
-        return "failed to derive vmnet gateway and subnet mask for \(subnet)"
+        return "failed to derive vmnet subnet address and subnet mask for \(subnet)"
       case .subnetConfigurationFailed(let subnet, let status):
         return "vmnet_network_configuration_set_ipv4_subnet(\(subnet)) failed with status \(status)"
       case .networkCreationFailed(let subnet, let status):
