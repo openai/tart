@@ -3,6 +3,7 @@ import Semaphore
 import Virtualization
 
 #if compiler(>=6.4)
+  import TartCoreFoundationShim
   import vmnet
 
   struct IPv4Subnet: Equatable, CustomStringConvertible {
@@ -179,7 +180,7 @@ import Virtualization
     }
 
     private static func release(_ pointer: OpaquePointer) {
-      Unmanaged<AnyObject>.fromOpaque(UnsafeRawPointer(pointer)).release()
+      tart_cf_release(UnsafeRawPointer(pointer))
     }
   }
 
