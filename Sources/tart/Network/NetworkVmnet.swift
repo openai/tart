@@ -106,9 +106,12 @@ import Virtualization
 
     init(subnet: IPv4Subnet) throws {
       var status: vmnet_return_t = .VMNET_FAILURE
-      guard let configuration = vmnet_network_configuration_create(.VMNET_SHARED_MODE, &status),
-            status == .VMNET_SUCCESS
-      else {
+      guard let configuration = vmnet_network_configuration_create(.VMNET_SHARED_MODE, &status) else {
+        throw NetworkVmnetError.configurationCreationFailed(status: status)
+      }
+      defer { Self.release(configuration) }
+
+      guard status == .VMNET_SUCCESS else {
         throw NetworkVmnetError.configurationCreationFailed(status: status)
       }
 
@@ -126,7 +129,18 @@ import Virtualization
       }
 
       status = .VMNET_FAILURE
-      guard let network = vmnet_network_create(configuration, &status), status == .VMNET_SUCCESS else {
+      guard let network = vmnet_network_create(configuration, &status) else {
+        throw NetworkVmnetError.networkCreationFailed(subnet: subnet, status: status)
+      }
+
+      var releaseNetworkOnFailure = true
+      defer {
+        if releaseNetworkOnFailure {
+          Self.release(network)
+        }
+      }
+
+      guard status == .VMNET_SUCCESS else {
         throw NetworkVmnetError.networkCreationFailed(subnet: subnet, status: status)
       }
 
@@ -145,6 +159,11 @@ import Virtualization
       }
 
       self.network = network
+      releaseNetworkOnFailure = false
+    }
+
+    deinit {
+      Self.release(network)
     }
 
     func attachments() -> [VZNetworkDeviceAttachment] {
@@ -156,7 +175,11 @@ import Virtualization
     }
 
     func stop() async throws {
-      // The vmnet reference follows the lifetime of this Network instance.
+      // The vmnet reference is released when this Network instance is deinitialized.
+    }
+
+    private static func release(_ pointer: OpaquePointer) {
+      Unmanaged<AnyObject>.fromOpaque(UnsafeRawPointer(pointer)).release()
     }
   }
 
