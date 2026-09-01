@@ -9,6 +9,7 @@ fileprivate struct VMInfo: Encodable {
   let DiskFormat: String
   let Size: HumanReadableByteCount
   let Display: String
+  let MACAddress: String
   let Running: Bool
   let State: String
 }
@@ -37,6 +38,7 @@ struct Get: AsyncParsableCommand {
         String(format: "%.3f", Float($0) / 1000 / 1000 / 1000)
       },
       Display: vmConfig.display.description,
+      MACAddress: vmConfig.macAddress.string,
       Running: try vmDir.running(),
       State: try vmDir.state().rawValue
     )
