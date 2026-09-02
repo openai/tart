@@ -6,8 +6,11 @@ import Foundation
 struct ErrorReportingTask {
   let task: Task<Void, Never>
 
+  // Inherit the caller's actor context, exactly as Task.init does. Without this, an
+  // operation written inside a @MainActor function runs on the cooperative pool
+  // rather than the main queue, trapping in callees that assert their queue.
   @discardableResult
-  init(_ context: String, operation: @escaping @Sendable () async throws -> Void) {
+  init(_ context: String, @_inheritActorContext operation: @escaping @Sendable () async throws -> Void) {
     task = Task {
       do {
         try await operation()
