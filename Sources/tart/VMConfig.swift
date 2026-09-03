@@ -99,7 +99,7 @@ struct VMConfig: Codable {
 
   func save(toURL: URL) throws {
     let encoder = JSONEncoder()
-    encoder.outputFormatting = .prettyPrinted
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     try encoder.encode(self).write(to: toURL)
   }
 
