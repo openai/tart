@@ -11,14 +11,13 @@ enum SoftnetError: Error {
 
 class Softnet: Network {
   private let process = Process()
+  private var controlFileHandle: FileHandle?
   private var monitorTask: Task<Void, Error>? = nil
   private let monitorTaskFinished = ManagedAtomic<Bool>(false)
 
   let vmFD: Int32
 
   init(vmMACAddress: String, extraArguments: [String] = [], controlFD: Int32? = nil) throws {
-    var controlFileHandle: FileHandle?
-
     if let controlFD = controlFD {
       guard controlFD > STDERR_FILENO else {
         throw SoftnetError.InitializationFailed(why: "Softnet control file descriptor must be greater than 2")
@@ -95,7 +94,7 @@ class Softnet: Network {
   }
 
   func run(_ sema: AsyncSemaphore) throws {
-    defer { try? (process.standardOutput as? FileHandle)?.close() }
+    defer { try? controlFileHandle?.close() }
 
     try process.run()
 
