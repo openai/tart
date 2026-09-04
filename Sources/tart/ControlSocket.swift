@@ -22,14 +22,14 @@ class ControlSocket {
 
     // Remove control socket file from previous "tart run" invocations,
     // if any, otherwise we may get the "address already in use" error
-    try? FileManager.default.removeItem(atPath: controlSocketURL.path())
+    try? FileManager.default.removeItem(atPath: controlSocketURL.path)
 
     // Change the current working directory to a VM's base directory
     // to work around Unix domain socket 104 byte limitation [1]
     //
     // [1]: https://blog.8-p.info/en/2020/06/11/unix-domain-socket-length/
     if let baseURL = controlSocketURL.baseURL {
-      FileManager.default.changeCurrentDirectoryPath(baseURL.path())
+      FileManager.default.changeCurrentDirectoryPath(baseURL.path)
     }
 
     do {
