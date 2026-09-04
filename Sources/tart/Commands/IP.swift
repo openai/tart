@@ -73,7 +73,7 @@ struct IP: AsyncParsableCommand {
         //
         // [1]: https://blog.8-p.info/en/2020/06/11/unix-domain-socket-length/
         if let baseURL = controlSocketURL.baseURL {
-          FileManager.default.changeCurrentDirectoryPath(baseURL.path())
+          FileManager.default.changeCurrentDirectoryPath(baseURL.path)
         }
 
         if let ip = try await AgentResolver.ResolveIP(controlSocketURL.relativePath) {

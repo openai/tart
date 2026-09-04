@@ -45,7 +45,7 @@ struct Exec: AsyncParsableCommand {
     //
     // [1]: https://blog.8-p.info/en/2020/06/11/unix-domain-socket-length/
     if let baseURL = vmDir.controlSocketURL.baseURL {
-      FileManager.default.changeCurrentDirectoryPath(baseURL.path())
+      FileManager.default.changeCurrentDirectoryPath(baseURL.path)
     }
 
     // Switch controlling terminal into raw mode when remote pseudo-terminal is requested
