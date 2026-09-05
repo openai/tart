@@ -75,9 +75,13 @@ struct Prune: AsyncParsableCommand {
   }
 
   static func pruneOlderThan(prunableStorages: [PrunableStorage], olderThanDate: Date) throws {
-    let prunables: [Prunable] = try prunableStorages.flatMap { try $0.prunables() }
-
-    try prunables.filter { try $0.accessDate() <= olderThanDate }.forEach { try $0.delete() }
+    while let prunable = try prunableStorages
+      .flatMap({ try $0.prunables() })
+      .first(where: { try $0.accessDate() <= olderThanDate }) {
+      // Deletion may remove derived prunables (for example shared content),
+      // so never continue from a stale snapshot.
+      try prunable.delete()
+    }
   }
 
   static func pruneSpaceBudget(prunableStorages: [PrunableStorage], spaceBudgetBytes: UInt64) throws {

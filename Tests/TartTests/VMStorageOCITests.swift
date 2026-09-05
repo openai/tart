@@ -348,8 +348,14 @@ final class VMStorageOCITests: XCTestCase {
   func testTagReplacementWaitsForPruneLock() throws {
     try withTemporaryTartHome {
       let storage = try VMStorageOCI()
-      let firstManifest = try stackedManifest(baseContentDigest: "sha256:first")
-      let secondManifest = try stackedManifest(baseContentDigest: "sha256:second")
+      let firstManifest = try stackedManifest(
+        baseContentDigest: "sha256:" + String(repeating: "1", count: 64),
+        overlayContentDigest: "sha256:" + String(repeating: "2", count: 64)
+      )
+      let secondManifest = try stackedManifest(
+        baseContentDigest: "sha256:" + String(repeating: "3", count: 64),
+        overlayContentDigest: "sha256:" + String(repeating: "4", count: 64)
+      )
       let firstName = try digestName(for: firstManifest)
       let secondName = try digestName(for: secondManifest)
       _ = try createRecord(for: firstManifest, in: storage)
@@ -727,6 +733,76 @@ final class VMStorageOCITests: XCTestCase {
       XCTAssertFalse(FileManager.default.fileExists(atPath: owner.url.path))
       XCTAssertFalse(FileManager.default.fileExists(atPath: unrelated.url.path))
       XCTAssertTrue(FileManager.default.fileExists(atPath: sharedBase.url.path))
+    }
+  }
+
+  func testPruningCachedImageRemovesOnlyItsTagSymlink() throws {
+    try withTemporaryTartHome {
+      let storage = try VMStorageOCI()
+      // Content digests are validated when manifests are scanned for pruning.
+      // Use syntactically valid digests here; the test only exercises record
+      // and tag-symlink cleanup, not content installation.
+      let deletedManifest = try stackedManifest(
+        baseContentDigest: "sha256:" + String(repeating: "a", count: 64),
+        overlayContentDigest: "sha256:" + String(repeating: "e", count: 64)
+      )
+      let retainedManifest = try stackedManifest(
+        baseContentDigest: "sha256:" + String(repeating: "b", count: 64),
+        overlayContentDigest: "sha256:" + String(repeating: "f", count: 64)
+      )
+      let deletedName = try digestName(for: deletedManifest)
+      let deletedRecord = try createRecord(for: deletedManifest, in: storage)
+      let tagName = RemoteName(host: "example.com", namespace: "org/image", reference: Reference(tag: "deleted"))
+      let tagURL = storage.baseURL.appendingRemoteName(tagName)
+      try storage.link(from: tagName, to: deletedName)
+      let retainedRecord = try createRecord(for: retainedManifest, in: storage)
+      let retainedTagName = RemoteName(host: "example.com", namespace: "org/image", reference: Reference(tag: "retained"))
+      let retainedTagURL = storage.baseURL.appendingRemoteName(retainedTagName)
+      try storage.link(from: retainedTagName, to: try digestName(for: retainedManifest))
+      try deletedRecord.url.updateAccessDate(Date(timeIntervalSince1970: 1))
+
+      try Prune.pruneOlderThan(
+        prunableStorages: [storage],
+        olderThanDate: Date(timeIntervalSince1970: 2)
+      )
+
+      XCTAssertFalse(FileManager.default.fileExists(atPath: deletedRecord.url.path))
+      XCTAssertFalse((try? tagURL.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) ?? false)
+      XCTAssertTrue(FileManager.default.fileExists(atPath: retainedRecord.url.path))
+      XCTAssertTrue(FileManager.default.fileExists(atPath: retainedTagURL.path))
+    }
+  }
+
+  func testSpaceBudgetPruningCachedImageRemovesOnlyItsTagSymlink() throws {
+    try withTemporaryTartHome {
+      let storage = try VMStorageOCI()
+      let deletedManifest = try stackedManifest(
+        baseContentDigest: "sha256:" + String(repeating: "c", count: 64),
+        overlayContentDigest: "sha256:" + String(repeating: "0", count: 64)
+      )
+      let retainedManifest = try stackedManifest(
+        baseContentDigest: "sha256:" + String(repeating: "d", count: 64),
+        overlayContentDigest: "sha256:" + String(repeating: "1", count: 64)
+      )
+      let deletedName = try digestName(for: deletedManifest)
+      let deletedRecord = try createRecord(for: deletedManifest, in: storage)
+      let tagName = RemoteName(host: "example.com", namespace: "org/image", reference: Reference(tag: "deleted"))
+      let tagURL = storage.baseURL.appendingRemoteName(tagName)
+      try storage.link(from: tagName, to: deletedName)
+      let retainedRecord = try createRecord(for: retainedManifest, in: storage)
+      let retainedTagName = RemoteName(host: "example.com", namespace: "org/image", reference: Reference(tag: "retained"))
+      let retainedTagURL = storage.baseURL.appendingRemoteName(retainedTagName)
+      try storage.link(from: retainedTagName, to: try digestName(for: retainedManifest))
+      try deletedRecord.url.updateAccessDate(Date(timeIntervalSince1970: 1))
+      try retainedRecord.url.updateAccessDate(Date(timeIntervalSince1970: 2))
+      let retainedSize = UInt64(try retainedRecord.allocatedSizeBytes())
+
+      try Prune.pruneSpaceBudget(prunableStorages: [storage], spaceBudgetBytes: retainedSize)
+
+      XCTAssertFalse(FileManager.default.fileExists(atPath: deletedRecord.url.path))
+      XCTAssertFalse((try? tagURL.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) ?? false)
+      XCTAssertTrue(FileManager.default.fileExists(atPath: retainedRecord.url.path))
+      XCTAssertTrue(FileManager.default.fileExists(atPath: retainedTagURL.path))
     }
   }
 
