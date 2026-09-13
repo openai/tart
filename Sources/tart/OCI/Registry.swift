@@ -111,12 +111,20 @@ struct TokenResponse: Decodable, Authentication {
 }
 
 class Registry {
-  private let baseURL: URL
+  let baseURL: URL
   let namespace: String
   let credentialsProviders: [CredentialsProvider]
   let authenticationKeeper = AuthenticationKeeper()
 
+  // Host as specified by the user (e.g. "docker.io"), which is used for naming
+  // and credentials lookup and might differ from the host in baseURL
+  private let specifiedHost: String?
+
   var host: String? {
+    if let specifiedHost {
+      return specifiedHost
+    }
+
     guard let host = baseURL.host else { return nil }
 
     if let port = baseURL.port {
@@ -128,10 +136,12 @@ class Registry {
 
   init(baseURL: URL,
        namespace: String,
+       host: String? = nil,
        credentialsProviders: [CredentialsProvider] = [EnvironmentCredentialsProvider(), DockerConfigCredentialsProvider(), KeychainCredentialsProvider()]
   ) throws {
     self.baseURL = baseURL
     self.namespace = namespace
+    self.specifiedHost = host
     self.credentialsProviders = credentialsProviders
   }
 
@@ -142,7 +152,7 @@ class Registry {
     credentialsProviders: [CredentialsProvider] = [EnvironmentCredentialsProvider(), DockerConfigCredentialsProvider(), KeychainCredentialsProvider()]
   ) throws {
     let proto = insecure ? "http" : "https"
-    let baseURLComponents = URLComponents(string: proto + "://" + host + "/v2/")!
+    let baseURLComponents = URLComponents(string: proto + "://" + Registry.apiHost(for: host) + "/v2/")!
 
     guard let baseURL = baseURLComponents.url else {
       var hint = ""
@@ -154,7 +164,15 @@ class Registry {
       throw RuntimeError.ImproperlyFormattedHost(host, hint)
     }
 
-    try self.init(baseURL: baseURL, namespace: namespace, credentialsProviders: credentialsProviders)
+    try self.init(baseURL: baseURL, namespace: namespace, host: host, credentialsProviders: credentialsProviders)
+  }
+
+  // Docker Hub serves its registry API from registry-1.docker.io, while docker.io,
+  // the host used in image names, redirects to Docker's website. URLSession follows
+  // these redirects, so we'd get an HTML page with HTTP 200 instead of an API
+  // response, which breaks pushing, pulling and "tart login" credentials validation.
+  private static func apiHost(for host: String) -> String {
+    host == "docker.io" ? "registry-1.docker.io" : host
   }
 
   func ping() async throws {
@@ -421,12 +439,8 @@ class Registry {
     await authenticationKeeper.set(try TokenResponse.parse(fromData: data))
   }
 
-  private func lookupCredentials() throws -> (String, String)? {
-    var host = baseURL.host!
-
-    if let port = baseURL.port {
-      host += ":\(port)"
-    }
+  func lookupCredentials() throws -> (String, String)? {
+    let host = self.host!
 
     for provider in credentialsProviders {
       do {
