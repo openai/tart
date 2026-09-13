@@ -17,6 +17,17 @@ final class RegistryHostTests: XCTestCase {
     XCTAssertEqual(credentialsProvider.requestedHosts, ["docker.io"])
   }
 
+  func testDockerHubIsMatchedCaseInsensitively() throws {
+    let credentialsProvider = RecordingCredentialsProvider()
+    let registry = try Registry(host: "Docker.IO", namespace: "org/repo",
+                                credentialsProviders: [credentialsProvider])
+
+    XCTAssertEqual(registry.baseURL, URL(string: "https://registry-1.docker.io/v2/"))
+    XCTAssertEqual(registry.host, "Docker.IO")
+    XCTAssertNil(try registry.lookupCredentials())
+    XCTAssertEqual(credentialsProvider.requestedHosts, ["Docker.IO"])
+  }
+
   func testOtherHostsAreUnchanged() throws {
     for host in ["ghcr.io", "index.docker.io", "registry-1.docker.io", "registry.hub.docker.com", "127.0.0.1:8080"] {
       let registry = try Registry(host: host, namespace: "org/repo")
