@@ -28,6 +28,15 @@ final class RegistryHostTests: XCTestCase {
     XCTAssertEqual(credentialsProvider.requestedHosts, ["Docker.IO"])
   }
 
+  func testDockerHubWithExplicitPort() throws {
+    for host in ["docker.io:443", "DOCKER.IO:443"] {
+      let registry = try Registry(host: host, namespace: "org/repo")
+
+      XCTAssertEqual(registry.baseURL, URL(string: "https://registry-1.docker.io:443/v2/"))
+      XCTAssertEqual(registry.host, host)
+    }
+  }
+
   func testOtherHostsAreUnchanged() throws {
     for host in ["ghcr.io", "index.docker.io", "registry-1.docker.io", "registry.hub.docker.com", "127.0.0.1:8080"] {
       let registry = try Registry(host: host, namespace: "org/repo")

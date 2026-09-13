@@ -172,8 +172,13 @@ class Registry {
   // these redirects, so we'd get an HTML page with HTTP 200 instead of an API
   // response, which breaks pushing, pulling and "tart login" credentials validation.
   private static func apiHost(for host: String) -> String {
-    // Host names are case insensitive, so "Docker.IO" is Docker Hub too
-    host.lowercased() == "docker.io" ? "registry-1.docker.io" : host
+    // Host names are case insensitive and may carry an explicit port, like "Docker.IO:443"
+    guard let components = URLComponents(string: "//" + host),
+          components.host?.lowercased() == "docker.io" else {
+      return host
+    }
+
+    return "registry-1.docker.io" + (components.port.map { ":\($0)" } ?? "")
   }
 
   func ping() async throws {
