@@ -1,4 +1,7 @@
 import Foundation
+import Darwin
+import System
+import Virtualization
 import Network
 import os.log
 import NIO
@@ -72,7 +75,13 @@ class ControlSocket {
 
         self.logger.info("running control socket proxy")
 
-        let vmChannel = try await ClientBootstrap(group: eventLoopGroup).withConnectedSocket(vmConnection.fileDescriptor) { childChannel in
+        // Duplicate the connection's file descriptor
+        //
+        // This way VZVirtioSocketConnection and NIO won't race to close the same descriptor,
+        // which may result in "tart run" crashing because of NIO's fatal assertion on EBADF.
+        let vmSocket = try duplicateAndCloseConnection(vmConnection)
+
+        let vmChannel = try await ClientBootstrap(group: eventLoopGroup).withConnectedSocket(vmSocket) { childChannel in
           childChannel.eventLoop.makeCompletedFuture {
             try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
               wrappingChannelSynchronously: childChannel
@@ -103,5 +112,16 @@ class ControlSocket {
         self.logger.error("control socket connection failed: \(error)")
       }
     }
+  }
+
+  private func duplicateAndCloseConnection(_ connection: VZVirtioSocketConnection) throws -> CInt {
+    defer { connection.close() }
+
+    let fd = fcntl(connection.fileDescriptor, F_DUPFD_CLOEXEC, 0)
+    guard fd >= 0 else {
+      throw Errno(rawValue: errno)
+    }
+
+    return fd
   }
 }
