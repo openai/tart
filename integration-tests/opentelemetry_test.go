@@ -9,6 +9,7 @@ import (
     "net/http/httptest"
     "net/url"
     "testing"
+    "time"
 
     "github.com/stretchr/testify/require"
     semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
@@ -19,7 +20,7 @@ import (
 
 func TestOpenTelemetry(t *testing.T) {
     // Start a mock OpenTelemetry collector server
-    var traces []*tracepkg.ExportTraceServiceRequest
+    traces := make(chan *tracepkg.ExportTraceServiceRequest, 1)
 
     server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
         var trace tracepkg.ExportTraceServiceRequest
@@ -43,7 +44,11 @@ func TestOpenTelemetry(t *testing.T) {
                 "we do not support %q yet", request.Header.Get("Content-Type"))
         }
 
-        traces = append(traces, &trace)
+        select {
+        case traces <- &trace:
+        default:
+            t.Error("received an unexpected additional trace")
+        }
 
         var response tracepkg.ExportTraceServiceResponse
 
@@ -54,6 +59,7 @@ func TestOpenTelemetry(t *testing.T) {
         _, err = writer.Write(responseBytes)
         require.NoError(t, err)
     }))
+    t.Cleanup(server.Close)
 
     // Start a "tart list" command
     serverURL, err := url.Parse(server.URL)
@@ -67,9 +73,16 @@ func TestOpenTelemetry(t *testing.T) {
     require.NoError(t, err)
 
     // Ensure that the mock OpenTelemetry collector received a trace from "tart list"
-    require.Len(t, traces, 1)
+    var trace *tracepkg.ExportTraceServiceRequest
+    select {
+    case trace = <-traces:
+    case <-time.After(5 * time.Second):
+        t.Fatal("timed out waiting for OpenTelemetry trace")
+    }
+    server.Close()
+    require.Empty(t, traces, "received an unexpected additional trace")
 
-    resourceSpans := traces[0].GetResourceSpans()
+    resourceSpans := trace.GetResourceSpans()
     require.Len(t, resourceSpans, 1)
 
     // Ensure that service name and version resources are set
