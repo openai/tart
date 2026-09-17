@@ -41,15 +41,32 @@ struct VMDisplayConfig: Codable, Equatable {
   var width: Int = 1024
   var height: Int = 768
   var unit: Unit?
+  var ppi: Int?
+
+  // Pixels-per-inch handed to the guest's pixel-unit framebuffer. Defaults to
+  // 72 (non-Retina) when no positive hint is given, matching
+  // Virtualization.framework's historical assumption; a Retina-class value
+  // (e.g. 220) makes the guest expose a HiDPI (scaling:on) mode regardless of
+  // the host display. A non-positive stored value (e.g. from a hand-edited
+  // config) is treated as unset so it never reaches the display configuration.
+  var effectivePixelsPerInch: Int {
+    if let ppi, ppi > 0 {
+      return ppi
+    }
+    return 72
+  }
 }
 
 extension VMDisplayConfig: CustomStringConvertible {
   var description: String {
+    var result = "\(width)x\(height)"
     if let unit {
-      "\(width)x\(height)\(unit.rawValue)"
-    } else {
-      "\(width)x\(height)"
+      result += unit.rawValue
     }
+    if let ppi {
+      result += "@\(ppi)"
+    }
+    return result
   }
 }
 

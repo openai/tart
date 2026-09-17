@@ -95,9 +95,11 @@ struct UnsupportedHostOSError: Error, CustomStringConvertible {
         VZMacGraphicsDisplayConfiguration(
           widthInPixels: vmConfig.display.width,
           heightInPixels: vmConfig.display.height,
-          // A reasonable guess according to Apple's documentation[1]
+          // Defaults to 72 — a reasonable guess according to Apple's
+          // documentation[1] — unless a --display "@PPI" hint asks for a
+          // Retina-class density (which yields a HiDPI guest mode).
           // [1]: https://developer.apple.com/documentation/coregraphics/1456599-cgdisplayscreensize
-          pixelsPerInch: 72
+          pixelsPerInch: vmConfig.display.effectivePixelsPerInch
         )
       ]
 
