@@ -49,6 +49,7 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
        nested: Bool = false,
        audio: Bool = true,
        clipboard: Bool = true,
+       noUSBAccessories: Bool = false,
        sync: VZDiskImageSynchronizationMode = .full,
        caching: VZDiskImageCachingMode? = nil,
        noTrackpad: Bool = false,
@@ -73,6 +74,7 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
                                                 nested: nested,
                                                 audio: audio,
                                                 clipboard: clipboard,
+                                                noUSBAccessories: noUSBAccessories,
                                                 sync: sync,
                                                 caching: caching,
                                                 noTrackpad: noTrackpad,
@@ -324,6 +326,7 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
     nested: Bool = false,
     audio: Bool = true,
     clipboard: Bool = true,
+    noUSBAccessories: Bool = false,
     sync: VZDiskImageSynchronizationMode = .full,
     caching: VZDiskImageCachingMode? = nil,
     noTrackpad: Bool = false,
@@ -364,25 +367,15 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
     configuration.audioDevices = [soundDeviceConfiguration]
 
     // Keyboard and mouse
-    if suspendable, let platformSuspendable = vmConfig.platform.self as? PlatformSuspendable {
-      configuration.keyboards = platformSuspendable.keyboardsSuspendable()
-      configuration.pointingDevices = platformSuspendable.pointingDevicesSuspendable()
-    } else {
-
-      if noKeyboard {
-        configuration.keyboards = []
-      } else {
-        configuration.keyboards = vmConfig.platform.keyboards()
-      }
-
-      if noPointer {
-        configuration.pointingDevices = []
-      } else if noTrackpad {
-        configuration.pointingDevices = vmConfig.platform.pointingDevicesSimplified()
-      } else {
-        configuration.pointingDevices = vmConfig.platform.pointingDevices()
-      }
-    }
+    configureInputDevices(
+      configuration,
+      platform: vmConfig.platform,
+      suspendable: suspendable,
+      noUSBAccessories: noUSBAccessories,
+      noTrackpad: noTrackpad,
+      noPointer: noPointer,
+      noKeyboard: noKeyboard
+    )
 
     // Networking
     configuration.networkDevices = network.attachments().map {
@@ -458,6 +451,36 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
     try configuration.validate()
 
     return configuration
+  }
+
+  static func configureInputDevices(
+    _ configuration: VZVirtualMachineConfiguration,
+    platform: Platform,
+    suspendable: Bool = false,
+    noUSBAccessories: Bool = false,
+    noTrackpad: Bool = false,
+    noPointer: Bool = false,
+    noKeyboard: Bool = false
+  ) {
+    if suspendable, let platformSuspendable = platform as? PlatformSuspendable {
+      configuration.keyboards = platformSuspendable.keyboardsSuspendable()
+      configuration.pointingDevices = platformSuspendable.pointingDevicesSuspendable()
+    } else {
+      configuration.keyboards = noKeyboard ? [] : platform.keyboards()
+
+      if noPointer {
+        configuration.pointingDevices = []
+      } else if noTrackpad {
+        configuration.pointingDevices = platform.pointingDevicesSimplified()
+      } else {
+        configuration.pointingDevices = platform.pointingDevices()
+      }
+    }
+
+    if noUSBAccessories {
+      configuration.keyboards.removeAll { $0 is VZUSBKeyboardConfiguration }
+      configuration.pointingDevices.removeAll { $0 is VZUSBScreenCoordinatePointingDeviceConfiguration }
+    }
   }
 
   func guestDidStop(_ virtualMachine: VZVirtualMachine) {

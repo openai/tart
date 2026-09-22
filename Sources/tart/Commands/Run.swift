@@ -90,6 +90,9 @@ struct Run: AsyncParsableCommand {
   @Flag(help: "Disable audio pass-through to host.")
   var noAudio: Bool = false
 
+  @Flag(help: "Disable USB accessories.")
+  var noUSBAccessories: Bool = false
+
   @Flag(help: ArgumentHelp(
     "Disable clipboard sharing between host and guest.",
     discussion: "Clipboard sharing requires spice-vdagent package on Linux and https://github.com/cirruslabs/tart-guest-agent on macOS."))
@@ -470,6 +473,7 @@ struct Run: AsyncParsableCommand {
       nested: nested,
       audio: !noAudio,
       clipboard: !noClipboard,
+      noUSBAccessories: noUSBAccessories,
       sync: VZDiskImageSynchronizationMode(diskOptions.syncModeRaw),
       caching: VZDiskImageCachingMode(diskOptions.cachingModeRaw),
       noTrackpad: noTrackpad,

@@ -4,6 +4,22 @@ import XCTest
 @testable import tart
 
 final class CommandBehaviorTests: XCTestCase {
+  func testNoUSBAccessoriesDoesNotEnableSuspendable() throws {
+    try withTemporaryTartHome {
+      let vmDir = try VMStorageLocal().create("no-usb-accessories")
+      try config().save(toURL: vmDir.configURL)
+      XCTAssertTrue(FileManager.default.createFile(atPath: vmDir.nvramURL.path, contents: Data()))
+      XCTAssertTrue(FileManager.default.createFile(atPath: vmDir.diskURL.path, contents: Data()))
+
+      let command = try Run.parseAsRoot(["no-usb-accessories", "--no-usb-accessories"]) as! Run
+
+      XCTAssertTrue(command.noUSBAccessories)
+      XCTAssertFalse(command.suspendable)
+      XCTAssertFalse(command.noAudio)
+      XCTAssertFalse(command.noGraphics)
+    }
+  }
+
   func testStandaloneDeleteDoesNotInitializeContentStore() throws {
     try withTemporaryTartHome {
       let vmDir = try VMStorageLocal().create("standalone")
