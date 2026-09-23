@@ -37,7 +37,7 @@ struct Export: AsyncParsableCommand {
   func userWantsOverwrite(_ filename: String) -> Bool {
     print("file \(filename) already exists, are you sure you want to overwrite it? (yes, [no])? ", terminator: "")
 
-    let answer = readLine()!
+    let answer = readLine()
 
     return answer == "yes"
   }
