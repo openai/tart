@@ -126,8 +126,7 @@ struct IPSWDownloader {
       guard let length, length > 0, offset <= length else {
         throw RuntimeError.Generic("IPSW response has no valid content length")
       }
-      let responseDigest = Self.expectedDigest(response) ??
-        (Self.validator(response) == headValidator ? headDigest : nil)
+      let responseDigest = Self.expectedDigest(response) ?? headDigest
 
       if offset == 0 {
         guard let validator = Self.validator(response) else {
