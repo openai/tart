@@ -3,8 +3,20 @@
 set -eu
 
 APP_PATH="dist/tart_darwin_all/tart.app"
+EXECUTABLE_PATH="$APP_PATH/Contents/MacOS/tart"
+
+# Newer Swift toolchains may need compatibility libraries on supported older macOS versions.
+xcrun swift-stdlib-tool \
+  --copy \
+  --destination "$APP_PATH/Contents/MacOS" \
+  --platform macosx \
+  --scan-executable "$EXECUTABLE_PATH"
 
 if [ "${TART_RELEASE_SNAPSHOT:-false}" = "true" ]; then
+  for LIBRARY in "$APP_PATH"/Contents/MacOS/libswift*.dylib; do
+    [ -f "$LIBRARY" ] || continue
+    codesign --force --sign - "$LIBRARY"
+  done
   codesign \
     --force \
     --deep \
@@ -12,6 +24,16 @@ if [ "${TART_RELEASE_SNAPSHOT:-false}" = "true" ]; then
     --entitlements Resources/tart-dev.entitlements \
     "$APP_PATH"
 else
+  for LIBRARY in "$APP_PATH"/Contents/MacOS/libswift*.dylib; do
+    [ -f "$LIBRARY" ] || continue
+    codesign \
+      --force \
+      --sign "Developer ID Application: Cirrus Labs, Inc. (9M2P8L4D89)" \
+      --timestamp \
+      --options runtime \
+      --keychain "$RUNNER_TEMP/build.keychain" \
+      "$LIBRARY"
+  done
   codesign \
     --force \
     --verbose \
