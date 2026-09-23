@@ -15,6 +15,10 @@ final class InputDeviceConfigurationTests: XCTestCase {
     VM.configureInputDevices(configuration, platform: Linux(), noUSBAccessories: true)
     XCTAssertTrue(configuration.keyboards.isEmpty)
     XCTAssertTrue(configuration.pointingDevices.isEmpty)
+
+    VM.configureInputDevices(configuration, platform: Linux(), noUSBAccessories: true, noTrackpad: true)
+    XCTAssertTrue(configuration.keyboards.isEmpty)
+    XCTAssertTrue(configuration.pointingDevices.isEmpty)
   }
 
   #if arch(arm64)
@@ -78,9 +82,14 @@ final class InputDeviceConfigurationTests: XCTestCase {
 
     func testSuspendableFallbackCannotReintroduceUSBInputs() {
       let configuration = VZVirtualMachineConfiguration()
+      let platform = MacInputPlatform(nativeKeyboard: false)
+      VM.configureInputDevices(configuration, platform: platform, suspendable: true)
+      XCTAssertEqual(configuration.keyboards.count, 1)
+      XCTAssertEqual(configuration.pointingDevices.count, 2)
+
       VM.configureInputDevices(
         configuration,
-        platform: MacInputPlatform(nativeKeyboard: false),
+        platform: platform,
         suspendable: true,
         noUSBAccessories: true
       )
@@ -111,30 +120,33 @@ final class InputDeviceConfigurationTests: XCTestCase {
       Linux().graphicsDevice(vmConfig: vmConfig)
     }
 
-    func keyboards() -> [VZKeyboardConfiguration] {
+    func keyboards(noUSB: Bool) -> [VZKeyboardConfiguration] {
+      var devices: [VZKeyboardConfiguration] = noUSB ? [] : [VZUSBKeyboardConfiguration()]
       if nativeKeyboard, #available(macOS 14, *) {
-        return [VZUSBKeyboardConfiguration(), VZMacKeyboardConfiguration()]
+        devices.append(VZMacKeyboardConfiguration())
       }
-      return [VZUSBKeyboardConfiguration()]
+      return devices
     }
 
-    func pointingDevices() -> [VZPointingDeviceConfiguration] {
-      [VZUSBScreenCoordinatePointingDeviceConfiguration(), VZMacTrackpadConfiguration()]
+    func pointingDevices(noUSB: Bool) -> [VZPointingDeviceConfiguration] {
+      var devices: [VZPointingDeviceConfiguration] = noUSB ? [] : [VZUSBScreenCoordinatePointingDeviceConfiguration()]
+      devices.append(VZMacTrackpadConfiguration())
+      return devices
     }
 
-    func pointingDevicesSimplified() -> [VZPointingDeviceConfiguration] {
-      [VZUSBScreenCoordinatePointingDeviceConfiguration()]
+    func pointingDevicesSimplified(noUSB: Bool) -> [VZPointingDeviceConfiguration] {
+      noUSB ? [] : [VZUSBScreenCoordinatePointingDeviceConfiguration()]
     }
 
-    func keyboardsSuspendable() -> [VZKeyboardConfiguration] {
+    func keyboardsSuspendable(noUSB: Bool) -> [VZKeyboardConfiguration] {
       if nativeKeyboard, #available(macOS 14, *) {
         return [VZMacKeyboardConfiguration()]
       }
-      return keyboards()
+      return keyboards(noUSB: noUSB)
     }
 
-    func pointingDevicesSuspendable() -> [VZPointingDeviceConfiguration] {
-      nativeKeyboard ? [VZMacTrackpadConfiguration()] : pointingDevices()
+    func pointingDevicesSuspendable(noUSB: Bool) -> [VZPointingDeviceConfiguration] {
+      nativeKeyboard ? [VZMacTrackpadConfiguration()] : pointingDevices(noUSB: noUSB)
     }
   }
 #endif

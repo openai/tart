@@ -5,12 +5,12 @@ protocol Platform: Codable {
   func bootLoader(nvramURL: URL) throws -> VZBootLoader
   func platform(nvramURL: URL, needsNestedVirtualization: Bool) throws -> VZPlatformConfiguration
   func graphicsDevice(vmConfig: VMConfig) -> VZGraphicsDeviceConfiguration
-  func keyboards() -> [VZKeyboardConfiguration]
-  func pointingDevices() -> [VZPointingDeviceConfiguration]
-  func pointingDevicesSimplified() -> [VZPointingDeviceConfiguration]
+  func keyboards(noUSB: Bool) -> [VZKeyboardConfiguration]
+  func pointingDevices(noUSB: Bool) -> [VZPointingDeviceConfiguration]
+  func pointingDevicesSimplified(noUSB: Bool) -> [VZPointingDeviceConfiguration]
 }
 
 protocol PlatformSuspendable: Platform {
-  func pointingDevicesSuspendable() -> [VZPointingDeviceConfiguration]
-  func keyboardsSuspendable() -> [VZKeyboardConfiguration]
+  func pointingDevicesSuspendable(noUSB: Bool) -> [VZPointingDeviceConfiguration]
+  func keyboardsSuspendable(noUSB: Bool) -> [VZKeyboardConfiguration]
 }

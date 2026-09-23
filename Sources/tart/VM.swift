@@ -463,23 +463,18 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
     noKeyboard: Bool = false
   ) {
     if suspendable, let platformSuspendable = platform as? PlatformSuspendable {
-      configuration.keyboards = platformSuspendable.keyboardsSuspendable()
-      configuration.pointingDevices = platformSuspendable.pointingDevicesSuspendable()
+      configuration.keyboards = platformSuspendable.keyboardsSuspendable(noUSB: noUSBAccessories)
+      configuration.pointingDevices = platformSuspendable.pointingDevicesSuspendable(noUSB: noUSBAccessories)
     } else {
-      configuration.keyboards = noKeyboard ? [] : platform.keyboards()
+      configuration.keyboards = noKeyboard ? [] : platform.keyboards(noUSB: noUSBAccessories)
 
       if noPointer {
         configuration.pointingDevices = []
       } else if noTrackpad {
-        configuration.pointingDevices = platform.pointingDevicesSimplified()
+        configuration.pointingDevices = platform.pointingDevicesSimplified(noUSB: noUSBAccessories)
       } else {
-        configuration.pointingDevices = platform.pointingDevices()
+        configuration.pointingDevices = platform.pointingDevices(noUSB: noUSBAccessories)
       }
-    }
-
-    if noUSBAccessories {
-      configuration.keyboards.removeAll { $0 is VZUSBKeyboardConfiguration }
-      configuration.pointingDevices.removeAll { $0 is VZUSBScreenCoordinatePointingDeviceConfiguration }
     }
   }
 

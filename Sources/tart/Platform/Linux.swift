@@ -35,16 +35,16 @@ struct Linux: Platform {
     return result
   }
 
-  func keyboards() -> [VZKeyboardConfiguration] {
-    [VZUSBKeyboardConfiguration()]
+  func keyboards(noUSB: Bool) -> [VZKeyboardConfiguration] {
+    noUSB ? [] : [VZUSBKeyboardConfiguration()]
   }
 
-  func pointingDevices() -> [VZPointingDeviceConfiguration] {
-    [VZUSBScreenCoordinatePointingDeviceConfiguration()]
+  func pointingDevices(noUSB: Bool) -> [VZPointingDeviceConfiguration] {
+    noUSB ? [] : [VZUSBScreenCoordinatePointingDeviceConfiguration()]
   }
 
-  func pointingDevicesSimplified() -> [VZPointingDeviceConfiguration] {
+  func pointingDevicesSimplified(noUSB: Bool) -> [VZPointingDeviceConfiguration] {
     // Linux doesn't support trackpad, so just return the regular pointing devices
-    return pointingDevices()
+    return pointingDevices(noUSB: noUSB)
   }
 }

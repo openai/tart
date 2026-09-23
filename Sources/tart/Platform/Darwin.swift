@@ -104,40 +104,42 @@ struct UnsupportedHostOSError: Error, CustomStringConvertible {
       return result
     }
 
-    func keyboards() -> [VZKeyboardConfiguration] {
+    func keyboards(noUSB: Bool) -> [VZKeyboardConfiguration] {
+      var devices: [VZKeyboardConfiguration] = noUSB ? [] : [VZUSBKeyboardConfiguration()]
       if #available(macOS 14, *) {
         // Mac keyboard is only supported by guests starting with macOS Ventura
-        return [VZUSBKeyboardConfiguration(), VZMacKeyboardConfiguration()]
-      } else {
-        return [VZUSBKeyboardConfiguration()]
+        devices.append(VZMacKeyboardConfiguration())
       }
+      return devices
     }
 
-    func keyboardsSuspendable() -> [VZKeyboardConfiguration] {
+    func keyboardsSuspendable(noUSB: Bool) -> [VZKeyboardConfiguration] {
       if #available(macOS 14, *) {
         return [VZMacKeyboardConfiguration()]
       } else {
         // fallback to the regular configuration
-        return keyboards()
+        return keyboards(noUSB: noUSB)
       }
     }
 
-    func pointingDevices() -> [VZPointingDeviceConfiguration] {
+    func pointingDevices(noUSB: Bool) -> [VZPointingDeviceConfiguration] {
       // Trackpad is only supported by guests starting with macOS Ventura
-      [VZUSBScreenCoordinatePointingDeviceConfiguration(), VZMacTrackpadConfiguration()]
+      var devices: [VZPointingDeviceConfiguration] = noUSB ? [] : [VZUSBScreenCoordinatePointingDeviceConfiguration()]
+      devices.append(VZMacTrackpadConfiguration())
+      return devices
     }
 
-    func pointingDevicesSimplified() -> [VZPointingDeviceConfiguration] {
+    func pointingDevicesSimplified(noUSB: Bool) -> [VZPointingDeviceConfiguration] {
       // Only include the USB pointing device, not the trackpad
-      return [VZUSBScreenCoordinatePointingDeviceConfiguration()]
+      return noUSB ? [] : [VZUSBScreenCoordinatePointingDeviceConfiguration()]
     }
 
-    func pointingDevicesSuspendable() -> [VZPointingDeviceConfiguration] {
+    func pointingDevicesSuspendable(noUSB: Bool) -> [VZPointingDeviceConfiguration] {
       if #available(macOS 14, *) {
         return [VZMacTrackpadConfiguration()]
       } else {
         // fallback to the regular configuration
-        return pointingDevices()
+        return pointingDevices(noUSB: noUSB)
       }
     }
   }
