@@ -132,21 +132,37 @@ struct IPSWDownloader {
         guard let validator = Self.validator(response) else {
           // Without a validator, the partial file cannot be safely reused across attempts.
           try discard(partialURL, metadataURL)
-          try await write(channel, to: partialURL, offset: 0, length: length)
-          return try promote(partialURL, metadataURL, length: length, expectedDigest: responseDigest)
+          let digest = try await write(channel, to: partialURL, offset: 0, length: length)
+          return try promote(partialURL, metadataURL, length: length,
+                             expectedDigest: responseDigest, computedDigest: digest)
         }
         partial = Partial(validator: validator, length: length, digest: responseDigest)
         try JSONEncoder().encode(partial).write(to: metadataURL, options: .atomic)
       }
 
-      try await write(channel, to: partialURL, offset: offset, length: length)
-      return try promote(partialURL, metadataURL, length: length, expectedDigest: responseDigest)
+      let digest = try await write(channel, to: partialURL, offset: offset, length: length)
+      return try promote(partialURL, metadataURL, length: length,
+                         expectedDigest: responseDigest, computedDigest: digest)
     }
 
     throw RuntimeError.Generic("IPSW server returned an invalid range response")
   }
 
-  private func write(_ channel: AsyncThrowingStream<Data, Error>, to url: URL, offset: Int64, length: Int64) async throws {
+  private func write(_ channel: AsyncThrowingStream<Data, Error>, to url: URL, offset: Int64, length: Int64) async throws -> String {
+    let digest = Digest()
+    if offset > 0 {
+      let reader = try FileHandle(forReadingFrom: url)
+      defer { try? reader.close() }
+      var remaining = offset
+      while remaining > 0 {
+        guard let chunk = try reader.read(upToCount: Int(min(remaining, 4 * 1024 * 1024))), !chunk.isEmpty else {
+          throw RuntimeError.Generic("IPSW partial file ended before its recorded length")
+        }
+        digest.update(chunk)
+        remaining -= Int64(chunk.count)
+      }
+    }
+
     if offset == 0 {
       FileManager.default.createFile(atPath: url.path, contents: nil)
     }
@@ -163,18 +179,21 @@ struct IPSWDownloader {
         throw RuntimeError.Generic("IPSW response exceeded its advertised length")
       }
       try handle.write(contentsOf: chunk)
+      digest.update(chunk)
       progress.completedUnitCount += Int64(chunk.count)
     }
     guard progress.completedUnitCount == length else {
       throw RuntimeError.Generic("IPSW response ended before its advertised length")
     }
+    return digest.finalize()
   }
 
-  private func promote(_ partialURL: URL, _ metadataURL: URL, length: Int64, expectedDigest: String?) throws -> URL {
+  private func promote(_ partialURL: URL, _ metadataURL: URL, length: Int64,
+                       expectedDigest: String?, computedDigest: String? = nil) throws -> URL {
     guard try fileLength(partialURL) == length else {
       throw RuntimeError.Generic("IPSW file length does not match its response")
     }
-    let digest = try Digest.hash(partialURL)
+    let digest = try computedDigest ?? Digest.hash(partialURL)
     if let expectedDigest, digest != expectedDigest {
       try discard(partialURL, metadataURL)
       throw RuntimeError.Generic("IPSW digest does not match the server's SHA-256")
