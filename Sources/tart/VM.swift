@@ -40,6 +40,9 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
 
   var network: Network
 
+  private var identityShutdown: VMIdentityShutdown?
+  private var identityStateObservation: NSKeyValueObservation?
+
   init(vmDir: VMDirectory,
        network: Network = NetworkShared(),
        additionalStorageDevices: [VZStorageDeviceConfiguration] = [],
@@ -82,7 +85,7 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
     virtualMachine = VZVirtualMachine(configuration: configuration)
 
     super.init()
-    virtualMachine.delegate = self
+    configureDelegate()
   }
 
   static func retrieveIPSW(remoteURL: URL) async throws -> URL {
@@ -206,7 +209,7 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
       virtualMachine = VZVirtualMachine(configuration: configuration)
 
       super.init()
-      virtualMachine.delegate = self
+      configureDelegate()
 
       // Run automated installation
       try await install(ipswURL)
@@ -309,7 +312,24 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
 
   @MainActor
   private func stop() async throws {
+    await identityShutdown?.cancel()
     try await self.virtualMachine.stop()
+  }
+
+  private func configureDelegate() {
+    virtualMachine.delegate = self
+    #if arch(arm64)
+      if #available(macOS 15, *), config.os == .darwin {
+        let shutdown = VMIdentityShutdown()
+        identityShutdown = shutdown
+        // A guest can initiate shutdown without going through tart stop.
+        identityStateObservation = virtualMachine.observe(\.state, options: [.new]) { _, change in
+          if change.newValue == .stopping {
+            shutdown.request()
+          }
+        }
+      }
+    #endif
   }
 
   static func craftConfiguration(
