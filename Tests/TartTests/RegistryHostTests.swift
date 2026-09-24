@@ -49,17 +49,38 @@ final class RegistryHostTests: XCTestCase {
     XCTAssertEqual(registry.baseURL, URL(string: "http://127.0.0.1:5000/v2/"))
     XCTAssertEqual(registry.host, "127.0.0.1:5000")
   }
+
+  func testHostPortIsNormalized() throws {
+    // Credentials stored for "127.0.0.1:5000" should still be found
+    // when the port is written with a leading zero
+    let credentialsProvider = RecordingCredentialsProvider(credentials: ["127.0.0.1:5000": ("user", "password")])
+    let registry = try Registry(host: "127.0.0.1:05000", namespace: "org/repo", insecure: true,
+                                credentialsProviders: [credentialsProvider])
+
+    XCTAssertEqual(registry.baseURL, URL(string: "http://127.0.0.1:05000/v2/"))
+    XCTAssertEqual(registry.host, "127.0.0.1:5000")
+
+    let (user, password) = try XCTUnwrap(registry.lookupCredentials())
+    XCTAssertEqual(user, "user")
+    XCTAssertEqual(password, "password")
+    XCTAssertEqual(credentialsProvider.requestedHosts, ["127.0.0.1:5000"])
+  }
 }
 
 fileprivate class RecordingCredentialsProvider: CredentialsProvider {
   let userFriendlyName = "recording credentials provider"
 
+  let credentials: [String: (String, String)]
   var requestedHosts: [String] = []
+
+  init(credentials: [String: (String, String)] = [:]) {
+    self.credentials = credentials
+  }
 
   func retrieve(host: String) throws -> (String, String)? {
     requestedHosts.append(host)
 
-    return nil
+    return credentials[host]
   }
 
   func store(host: String, user: String, password: String) throws {
