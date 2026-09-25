@@ -37,6 +37,12 @@ class ControlSocket {
 
     do {
       self.serverChannel = try await ServerBootstrap(group: eventLoopGroup)
+        .serverChannelInitializer { channel in
+          channel.pipeline.addHandler(
+            ControlSocketAcceptErrorHandler(),
+            name: "ControlSocketAcceptErrorHandler"
+          )
+        }
         .bind(unixDomainSocketPath: controlSocketURL.relativePath) { childChannel in
           childChannel.eventLoop.makeCompletedFuture {
             return try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
@@ -123,5 +129,18 @@ class ControlSocket {
     }
 
     return fd
+  }
+}
+
+private final class ControlSocketAcceptErrorHandler: ChannelInboundHandler {
+  typealias InboundIn = Channel
+  typealias InboundOut = Channel
+
+  func errorCaught(context: ChannelHandlerContext, error: Error) {
+    if error is NIOFcntlFailedError {
+      context.read()
+    } else {
+      context.fireErrorCaught(error)
+    }
   }
 }
