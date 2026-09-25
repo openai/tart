@@ -1,15 +1,19 @@
 import Foundation
 
 struct HumanReadableByteCount: Encodable, CustomStringConvertible {
-  private let byteCount: Int
+  private let byteCount: Int?
   private let jsonValue: any Encodable
 
-  init<JSONValue: Encodable>(_ byteCount: Int, encodedAs: (Int) -> JSONValue) {
+  init<JSONValue: Encodable>(_ byteCount: Int?, encodedAs: (Int) -> JSONValue) {
     self.byteCount = byteCount
-    self.jsonValue = encodedAs(byteCount)
+    self.jsonValue = byteCount.map(encodedAs)
   }
 
   var description: String {
+    guard let byteCount else {
+      return "-"
+    }
+
     let formatter = MeasurementFormatter()
     formatter.unitOptions = .naturalScale
     formatter.unitStyle = .medium
