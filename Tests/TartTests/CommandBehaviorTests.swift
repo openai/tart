@@ -37,6 +37,24 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testDeleteRunningVMPreservesVMIsRunningError() throws {
+    try withTemporaryTartHome {
+      let vmDir = try VMStorageLocal().create("running")
+      let lock = try vmDir.lock()
+      try lock.lock()
+      defer { try? lock.unlock() }
+
+      do {
+        try VMStorageLocal().delete("running")
+        XCTFail("expected deleting a running VM to fail")
+      } catch let RuntimeError.VMIsRunning(name) {
+        XCTAssertEqual(name, "running")
+      } catch {
+        XCTFail("unexpected error: \(error)")
+      }
+    }
+  }
+
   func testSetDiskRejectsStackedVMBeforeSavingConfig() async throws {
     try await withTemporaryTartHome {
       let vmDir = try VMStorageLocal().create("stacked")

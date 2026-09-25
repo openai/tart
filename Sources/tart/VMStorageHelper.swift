@@ -26,6 +26,8 @@ class VMStorageHelper {
       return try closure()
     } catch RuntimeError.PIDLockMissing {
       throw RuntimeError.VMDoesNotExist(name: name)
+    } catch let error as RuntimeError {
+      throw error
     } catch {
       if error.isFileNotFound() {
         throw RuntimeError.VMDoesNotExist(name: name)
