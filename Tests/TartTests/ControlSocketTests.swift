@@ -22,9 +22,9 @@ final class ControlSocketTests: XCTestCase {
     do {
       let serverChannel = try XCTUnwrap(controlSocket?.serverChannel)
       XCTAssertTrue(FileManager.default.fileExists(atPath: socketURL.path))
-      let handlerContext = try serverChannel.channel.pipeline.syncOperations.context(
+      let handlerContext = try await serverChannel.channel.pipeline.context(
         name: "ControlSocketAcceptErrorHandler"
-      )
+      ).get()
       XCTAssertNotNil(handlerContext)
 
       try await serverChannel.executeThenClose { _ in }
