@@ -41,12 +41,35 @@ final class CommandBehaviorTests: XCTestCase {
     try withTemporaryTartHome {
       let vmDir = try VMStorageLocal().create("running")
       try config().save(toURL: vmDir.configURL)
-      let lock = try vmDir.lock()
-      try lock.lock()
-      defer { try? lock.unlock() }
+      let lockerScript = try temporaryDirectory().appendingPathComponent("lock.py")
+      try """
+      #!/usr/bin/env python3
+      import fcntl
+      import sys
+
+      with open(sys.argv[1], "r+") as lock:
+          fcntl.lockf(lock, fcntl.LOCK_EX)
+          print("ready", flush=True)
+          sys.stdin.read()
+      """.write(to: lockerScript, atomically: true, encoding: .utf8)
+      try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: lockerScript.path)
+
+      let process = Process()
+      process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+      process.arguments = [lockerScript.path, vmDir.configURL.path]
+      let input = Pipe()
+      let output = Pipe()
+      process.standardInput = input
+      process.standardOutput = output
+      try process.run()
+      XCTAssertEqual(String(data: output.fileHandleForReading.readData(ofLength: 6), encoding: .utf8), "ready\n")
+      defer {
+        input.fileHandleForWriting.closeFile()
+        process.waitUntilExit()
+      }
 
       do {
-        try VMStorageLocal().delete("running")
+        try VMStorageHelper.delete("running")
         XCTFail("expected deleting a running VM to fail")
       } catch let RuntimeError.VMIsRunning(name) {
         XCTAssertEqual(name, "running")
