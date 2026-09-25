@@ -40,6 +40,7 @@ final class CommandBehaviorTests: XCTestCase {
   func testDeleteRunningVMPreservesVMIsRunningError() throws {
     try withTemporaryTartHome {
       let vmDir = try VMStorageLocal().create("running")
+      try config().save(toURL: vmDir.configURL)
       let lock = try vmDir.lock()
       try lock.lock()
       defer { try? lock.unlock() }
