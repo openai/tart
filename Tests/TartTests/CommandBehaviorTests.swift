@@ -4,6 +4,85 @@ import XCTest
 @testable import tart
 
 final class CommandBehaviorTests: XCTestCase {
+  func testListSurvivesUnavailableDiskCapacity() async throws {
+    try await withTemporaryTartHome {
+      let previousPath = try installUnavailableDiskutil()
+      defer { restoreEnvironment("PATH", to: previousPath) }
+
+      let local = try VMStorageLocal()
+      let oci = try VMStorageOCI()
+      for (name, diskFormat) in [("unavailable", DiskImageFormat.asif), ("healthy", .raw)] {
+        let remoteName = try RemoteName("example.com/org/\(name):latest")
+        for vmDir in [try local.create(name), try oci.create(remoteName)] {
+          var vmConfig = config()
+          vmConfig.diskFormat = diskFormat
+          try vmConfig.save(toURL: vmDir.configURL)
+          XCTAssertTrue(FileManager.default.createFile(atPath: vmDir.nvramURL.path, contents: Data()))
+          // The diskutil stub simulates a locked ASIF disk without needing a running VM.
+          XCTAssertTrue(FileManager.default.createFile(
+            atPath: vmDir.diskURL.path,
+            contents: Data(repeating: 0, count: 4096)
+          ))
+          if diskFormat == .asif {
+            XCTAssertThrowsError(try vmDir.diskSizeBytes())
+          }
+        }
+      }
+
+      for sourceArguments in [[], ["--source", "local"], ["--source", "oci"]] {
+        let json = try await commandOutput(List.self, sourceArguments + ["--format", "json"])
+        let rows = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]])
+        XCTAssertEqual(rows.count, sourceArguments.isEmpty ? 4 : 2)
+        for row in rows {
+          let name = try XCTUnwrap(row["Name"] as? String)
+          if name.contains("unavailable") {
+            XCTAssertTrue(row["Disk"] is NSNull)
+          } else {
+            XCTAssertEqual(row["Disk"] as? Int, 0)
+          }
+          XCTAssertEqual(row["State"] as? String, "stopped")
+          XCTAssertEqual(row["Running"] as? Bool, false)
+        }
+
+        let text = try await commandOutput(List.self, sourceArguments)
+        XCTAssertTrue(text.contains("unavailable"))
+        XCTAssertTrue(text.contains("healthy"))
+        XCTAssertTrue(text.contains("-"))
+
+        let quiet = try await commandOutput(List.self, sourceArguments + ["--quiet"])
+        XCTAssertEqual(quiet.split(separator: "\n").map(String.init), rows.compactMap { $0["Name"] as? String })
+      }
+    }
+  }
+
+  func testGetSurvivesUnavailableDiskCapacity() async throws {
+    try await withTemporaryTartHome {
+      let previousPath = try installUnavailableDiskutil()
+      defer { restoreEnvironment("PATH", to: previousPath) }
+
+      let vmDir = try VMStorageLocal().create("unavailable")
+      var vmConfig = config()
+      vmConfig.diskFormat = .asif
+      try vmConfig.save(toURL: vmDir.configURL)
+      XCTAssertTrue(FileManager.default.createFile(atPath: vmDir.nvramURL.path, contents: Data()))
+      XCTAssertTrue(FileManager.default.createFile(
+        atPath: vmDir.diskURL.path,
+        contents: Data(repeating: 0, count: 4096)
+      ))
+      XCTAssertThrowsError(try vmDir.diskSizeBytes())
+
+      let json = try await commandOutput(Get.self, ["unavailable", "--format", "json"])
+      let info = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+      XCTAssertTrue(info["Disk"] is NSNull)
+      XCTAssertEqual(info["DiskFormat"] as? String, "asif")
+      XCTAssertEqual(info["State"] as? String, "stopped")
+
+      let text = try await commandOutput(Get.self, ["unavailable"])
+      XCTAssertTrue(text.contains("asif"))
+      XCTAssertTrue(text.contains("-"))
+    }
+  }
+
   func testNoUSBAccessoriesDoesNotEnableSuspendable() throws {
     try withTemporaryTartHome {
       let vmDir = try VMStorageLocal().create("no-usb-accessories")
@@ -128,6 +207,44 @@ final class CommandBehaviorTests: XCTestCase {
       at: Config().tartTmpDir,
       includingPropertiesForKeys: nil
     )
+  }
+
+  private func installUnavailableDiskutil() throws -> String? {
+    let binDirectory = try temporaryDirectory()
+    let diskutilURL = binDirectory.appendingPathComponent("diskutil")
+    let script = """
+    #!/bin/sh
+    echo 'Resource temporarily unavailable' >&2
+    exit 1
+    """
+    try script.write(to: diskutilURL, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: diskutilURL.path)
+    let previousPath = ProcessInfo.processInfo.environment["PATH"]
+    setenv("PATH", binDirectory.path, 1)
+    return previousPath
+  }
+
+  private func commandOutput<Command: AsyncParsableCommand>(
+    _ commandType: Command.Type,
+    _ arguments: [String]
+  ) async throws -> String {
+    let outputURL = try temporaryDirectory().appendingPathComponent("stdout")
+    XCTAssertTrue(FileManager.default.createFile(atPath: outputURL.path, contents: nil))
+    let output = try FileHandle(forWritingTo: outputURL)
+    defer { try? output.close() }
+
+    fflush(stdout)
+    let savedStdout = dup(STDOUT_FILENO)
+    defer {
+      fflush(stdout)
+      dup2(savedStdout, STDOUT_FILENO)
+      close(savedStdout)
+    }
+    dup2(output.fileDescriptor, STDOUT_FILENO)
+    var command = try Command.parseAsRoot(arguments) as! Command
+    try await command.run()
+    fflush(stdout)
+    return try String(contentsOf: outputURL, encoding: .utf8)
   }
 
   private func withTemporaryTartHome(_ body: () throws -> Void) throws {

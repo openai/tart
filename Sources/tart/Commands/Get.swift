@@ -31,7 +31,8 @@ struct Get: AsyncParsableCommand {
       OS: vmConfig.os,
       CPU: vmConfig.cpuCount,
       Memory: memorySizeInMb,
-      Disk: HumanReadableByteCount(try vmDir.diskSizeBytes()) { $0 / 1000 / 1000 / 1000 },
+      // ASIF capacity lookup can fail while a running VM holds the disk open.
+      Disk: HumanReadableByteCount(try? vmDir.diskSizeBytes()) { $0 / 1000 / 1000 / 1000 },
       DiskFormat: vmConfig.diskFormat.rawValue,
       Size: HumanReadableByteCount(try vmDir.allocatedSizeBytes()) {
         String(format: "%.3f", Float($0) / 1000 / 1000 / 1000)
