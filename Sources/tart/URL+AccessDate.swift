@@ -8,21 +8,21 @@ extension URL {
   }
 
   func updateAccessDate(_ accessDate: Date = Date()) throws {
-    let attrs = try resourceValues(forKeys: [.contentAccessDateKey])
-    let modificationDate = attrs.contentAccessDate!
-
-    let times = [accessDate.asTimeval(), modificationDate.asTimeval()]
-    let ret = utimes(path, times)
+    let times = [accessDate.asTimespec(), timespec(tv_sec: 0, tv_nsec: Int(UTIME_OMIT))]
+    let ret = utimensat(AT_FDCWD, path, times, 0)
     if ret != 0 {
       let details = Errno(rawValue: CInt(errno))
 
-      throw RuntimeError.FailedToUpdateAccessDate("utimes(2) failed: \(details)")
+      throw RuntimeError.FailedToUpdateAccessDate("utimensat(2) failed: \(details)")
     }
   }
 }
 
 extension Date {
-  func asTimeval() -> timeval {
-    timeval(tv_sec: Int(timeIntervalSince1970), tv_usec: 0)
+  func asTimespec() -> timespec {
+    let seconds = floor(timeIntervalSince1970)
+    let nanoseconds = (timeIntervalSince1970 - seconds) * 1_000_000_000
+
+    return timespec(tv_sec: Int(seconds), tv_nsec: Int(nanoseconds))
   }
 }
