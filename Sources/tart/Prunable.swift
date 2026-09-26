@@ -2,6 +2,13 @@ import Foundation
 
 protocol PrunableStorage {
   func prunables() throws -> [Prunable]
+  func prunables(simulatingRemovalOf removedURLs: Swift.Set<URL>) throws -> [Prunable]
+}
+
+extension PrunableStorage {
+  func prunables(simulatingRemovalOf removedURLs: Swift.Set<URL>) throws -> [Prunable] {
+    try prunables().filter { !removedURLs.contains($0.url) }
+  }
 }
 
 protocol Prunable {
