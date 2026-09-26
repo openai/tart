@@ -1,4 +1,5 @@
 import NIO
+@testable import NIOPosix
 import XCTest
 @testable import tart
 
@@ -22,16 +23,48 @@ final class ControlSocketTests: XCTestCase {
     do {
       let serverChannel = try XCTUnwrap(controlSocket?.serverChannel)
       XCTAssertTrue(FileManager.default.fileExists(atPath: socketURL.path))
-      let hasHandler = try await serverChannel.channel.pipeline.context(
-        name: "ControlSocketAcceptErrorHandler"
-      ).map { _ in true }.get()
-      XCTAssertTrue(hasHandler)
 
       try await serverChannel.executeThenClose { _ in }
     }
 
     controlSocket = nil
     try await eventLoopGroup.shutdownGracefully()
+  }
+
+  func testAcceptErrorsRetryReadingAndForwardOtherErrors() async throws {
+    let temporaryDirectory = try makeTemporaryDirectory()
+    let originalDirectory = FileManager.default.currentDirectoryPath
+    defer {
+      FileManager.default.changeCurrentDirectoryPath(originalDirectory)
+      try? FileManager.default.removeItem(at: temporaryDirectory)
+    }
+
+    let socketURL = URL(fileURLWithPath: "control.sock", relativeTo: temporaryDirectory)
+    let controlSocket = try await ControlSocket(socketURL)
+    let channel = controlSocket.serverChannel.channel
+    let observations = try await channel.eventLoop.submit {
+      let observer = AcceptErrorObserver()
+      // Placing this after the recovery handler also detects context.read(), which
+      // bypasses downstream backpressure handlers instead of starting at the tail.
+      try channel.pipeline.syncOperations.addHandler(observer)
+      for _ in 0..<3 {
+        channel.pipeline.fireErrorCaught(NIOFcntlFailedError())
+      }
+      let retries = observer.readCount
+      let transientErrors = observer.errors.count
+      channel.pipeline.fireErrorCaught(ChannelError.inputClosed)
+      return (retries, transientErrors, observer.readCount,
+              observer.errors.count, observer.errors.first as? ChannelError)
+    }.get()
+
+    try await controlSocket.serverChannel.executeThenClose { _ in }
+    try await controlSocket.eventLoopGroup.shutdownGracefully()
+
+    XCTAssertEqual(observations.0, 3)
+    XCTAssertEqual(observations.1, 0)
+    XCTAssertEqual(observations.2, 3)
+    XCTAssertEqual(observations.3, 1)
+    XCTAssertEqual(observations.4, .inputClosed)
   }
 
   func testInitializerPropagatesControlSocketCreationFailure() async throws {
@@ -96,5 +129,22 @@ final class ControlSocketTests: XCTestCase {
     )
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
     return directory
+  }
+}
+
+private final class AcceptErrorObserver: ChannelDuplexHandler {
+  typealias InboundIn = Channel
+  typealias OutboundIn = ByteBuffer
+
+  var readCount = 0
+  var errors: [Error] = []
+
+  func read(context: ChannelHandlerContext) {
+    readCount += 1
+    context.read()
+  }
+
+  func errorCaught(context: ChannelHandlerContext, error: Error) {
+    errors.append(error)
   }
 }
