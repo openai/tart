@@ -160,7 +160,8 @@ struct Clone: AsyncParsableCommand {
   }
 
   private func rejectExistingDestination(_ localStorage: VMStorageLocal) throws {
-    if !overwrite && localStorage.exists(newName) {
+    let destinationURL = localStorage.baseURL.appendingPathComponent(newName, isDirectory: true)
+    if !overwrite && FileManager.default.fileExists(atPath: destinationURL.path) {
       throw ValidationError("VM \"\(newName)\" already exists, use --overwrite to replace it")
     }
   }

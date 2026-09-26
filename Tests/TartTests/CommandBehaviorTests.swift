@@ -146,6 +146,36 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testClonePreservesIncompleteDestination() async throws {
+    try await withTemporaryTartHome {
+      _ = try makeStandaloneVM(named: "source", diskContents: "source")
+      let storage = try VMStorageLocal()
+      let destination = storage.baseURL.appendingPathComponent("destination", isDirectory: true)
+      try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+      let diskURL = destination.appendingPathComponent("disk.img")
+      try Data("existing".utf8).write(to: diskURL)
+      XCTAssertFalse(storage.exists("destination"))
+
+      // Check both a local source and rejection before any remote registry access.
+      for source in ["source", "invalid.invalid/image:latest"] {
+        let command = try Clone.parseAsRoot([source, "destination"]) as! Clone
+        do {
+          try await command.run()
+          XCTFail("expected an incomplete destination to be preserved")
+        } catch let error as ValidationError {
+          XCTAssertEqual(error.message, "VM \"destination\" already exists, use --overwrite to replace it")
+        }
+        XCTAssertEqual(try Data(contentsOf: diskURL), Data("existing".utf8))
+        XCTAssertFalse(storage.exists("destination"))
+      }
+
+      let command = try Clone.parseAsRoot(["--overwrite", "source", "destination"]) as! Clone
+      try await command.run()
+      XCTAssertEqual(try Data(contentsOf: diskURL), Data("source".utf8))
+      XCTAssertTrue(storage.exists("destination"))
+    }
+  }
+
   func testSetDiskRejectsStackedVMBeforeSavingConfig() async throws {
     try await withTemporaryTartHome {
       let vmDir = try VMStorageLocal().create("stacked")

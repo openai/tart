@@ -46,7 +46,7 @@ func TestClonePreservesRunningDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 2 {
-		_, stderr, err := tart.Tart(t, "clone", "source", "destination")
+		_, stderr, err := tart.Tart(t, "clone", "--overwrite", "source", "destination")
 		if err == nil || !strings.Contains(strings.ToLower(stderr), "running") {
 			t.Fatalf("clone must reject the running destination: %v: %s", err, stderr)
 		}
@@ -64,7 +64,7 @@ func TestClonePreservesRunningDestination(t *testing.T) {
 	if err := syscall.FcntlFlock(held.Fd(), syscall.F_SETLK, &lock); err != nil {
 		t.Fatal(err)
 	}
-	if _, stderr, err := tart.Tart(t, "clone", "source", "destination"); err != nil {
+	if _, stderr, err := tart.Tart(t, "clone", "--overwrite", "source", "destination"); err != nil {
 		t.Fatalf("clone after shutdown: %v: %s", err, stderr)
 	}
 	currentInfo, err := os.Stat(config)
