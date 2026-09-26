@@ -138,7 +138,7 @@ private final class ControlSocketAcceptErrorHandler: ChannelInboundHandler {
 
   func errorCaught(context: ChannelHandlerContext, error: Error) {
     if error is NIOFcntlFailedError {
-      context.read()
+      context.channel.read()
     } else {
       context.fireErrorCaught(error)
     }
