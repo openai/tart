@@ -46,9 +46,6 @@ archives:
         dst: tart.app/Contents/Resources/Assets.car
       - src: dist/tart_darwin_all/tart.app/Contents/_CodeSignature/CodeResources
         dst: tart.app/Contents/_CodeSignature/CodeResources
-      - src: dist/tart_darwin_all/tart.app/Contents/MacOS/libswift*.dylib
-        dst: tart.app/Contents/MacOS
-        strip_parent: true
       - LICENSE
     hooks:
       after:
