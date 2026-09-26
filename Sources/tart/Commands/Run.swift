@@ -880,6 +880,12 @@ struct MainApp: App {
             }
           }
         }
+        // Only guests that support the virtio-balloon
+        // device get one, see VM.buildConfiguration()
+        if vm!.memoryBalloonDevice != nil {
+          Divider()
+          FreeUpMemory(vm: vm!)
+        }
       }
     }
   }
@@ -930,6 +936,19 @@ struct AboutTart: View {
         NSApplication.AboutPanelOptionKey.credits: credits,
       ])
     }
+  }
+}
+
+// Asks the guest to free up as much memory as possible for as
+// long as it's enabled, see VM.setMemoryBalloonInflated(_:)
+struct FreeUpMemory: View {
+  @ObservedObject var vm: VM
+
+  var body: some View {
+    Toggle("Free Up Memory", isOn: Binding(
+      get: { vm.memoryBalloonInflated },
+      set: { vm.setMemoryBalloonInflated($0) }
+    ))
   }
 }
 
