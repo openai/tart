@@ -79,6 +79,11 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testFileNotFoundRequiresCocoaErrorDomain() {
+    XCTAssertTrue(NSError(domain: NSCocoaErrorDomain, code: NSFileNoSuchFileError).isFileNotFound())
+    XCTAssertFalse(NSError(domain: "RuntimeError", code: NSFileNoSuchFileError).isFileNotFound())
+  }
+
   func testSetDiskRejectsStackedVMBeforeSavingConfig() async throws {
     try await withTemporaryTartHome {
       let vmDir = try VMStorageLocal().create("stacked")
