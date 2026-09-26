@@ -20,6 +20,9 @@ struct Set: AsyncParsableCommand {
   @Flag(inversion: .prefixedNo, help: ArgumentHelp("Whether to automatically reconfigure the VM's display to fit the window"))
   var displayRefit: Bool? = nil
 
+  @Option(help: ArgumentHelp("MAC address to use."))
+  var mac: String?
+
   @Flag(help: ArgumentHelp("Generate a new random MAC address for the VM."))
   var randomMAC: Bool = false
 
@@ -47,6 +50,10 @@ struct Set: AsyncParsableCommand {
       throw ValidationError("--disk is not supported for VMs with a stacked disk")
     }
 
+    if randomMAC && mac != nil {
+      throw ValidationError("--random-mac and --mac are mutually exclusive")
+    }
+
     var vmConfig = try VMConfig(fromURL: vmDir.configURL)
 
     if let cpu = cpu {
@@ -68,6 +75,14 @@ struct Set: AsyncParsableCommand {
     }
 
     vmConfig.displayRefit = displayRefit
+
+    if let mac = mac {
+      if let macAddress = VZMACAddress.init(string: mac), macAddress.isUnicastAddress {
+        vmConfig.macAddress = macAddress
+      } else {
+        throw ValidationError("'\(mac)' is not a valid unicast MAC address")
+      }
+    }
 
     if randomMAC {
       vmConfig.macAddress = VZMACAddress.randomLocallyAdministered()
