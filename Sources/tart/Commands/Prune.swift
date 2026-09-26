@@ -102,11 +102,9 @@ struct Prune: AsyncParsableCommand {
       }
 
       guard let prunableToDelete else {
-        return
+        break
       }
 
-      // Deleting one cached stacked image can change which remaining image
-      // owns shared immutable content. Rebuild before choosing another.
       try prunableToDelete.delete()
     }
   }

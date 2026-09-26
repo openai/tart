@@ -397,6 +397,19 @@ struct VMDirectory: Prunable {
     try lock.unlock()
   }
 
+  /// Deletes this directory while the caller already holds ContentStore's
+  /// prune lock.
+  func deleteHoldingPruneLock() throws {
+    let lock = try lock()
+
+    if try !lock.trylock() {
+      throw RuntimeError.VMIsRunning(name)
+    }
+
+    defer { try? lock.unlock() }
+    try FileManager.default.removeItem(at: baseURL)
+  }
+
   /// Removes a VM directory while preserving the content-store reference
   /// protocol for any complete or partially published manifest it contains.
   func removeFromDisk() throws {
