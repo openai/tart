@@ -14,6 +14,15 @@ cp -c Resources/embedded.provisionprofile .build/tart.app/Contents/embedded.prov
 cp -c Resources/Info.plist .build/tart.app/Contents/Info.plist
 cp -c "Resources/actool/UPW Tart.icns" "Resources/actool/Assets.car" .build/tart.app/Contents/Resources/
 
-codesign --sign - --entitlements Resources/tart-dev.entitlements --force .build/tart.app
+ENTITLEMENTS="Resources/tart-dev.entitlements"
+for argument in "$@"; do
+  case "$argument" in
+    --net-vmnet-subnet | --net-vmnet-subnet=*)
+      ENTITLEMENTS="Resources/tart-vmnet-dev.entitlements"
+      ;;
+  esac
+done
+
+codesign --sign - --entitlements "$ENTITLEMENTS" --force .build/tart.app
 
 .build/tart.app/Contents/MacOS/tart "$@"
