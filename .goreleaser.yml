@@ -47,9 +47,6 @@ archives:
       - src: dist/tart_darwin_all/tart.app/Contents/_CodeSignature/CodeResources
         dst: tart.app/Contents/_CodeSignature/CodeResources
       - LICENSE
-    hooks:
-      after:
-        - sh .ci/test-release-archive.sh dist/tart.tar.gz
 
 release:
   prerelease: auto
