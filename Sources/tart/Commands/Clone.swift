@@ -34,6 +34,9 @@ struct Clone: AsyncParsableCommand {
   @Flag(help: "create a stacked disk that uses the source image as an immutable base")
   var stacked: Bool = false
 
+  @Flag(help: "overwrite an existing local VM")
+  var overwrite: Bool = false
+
   @Option(help: ArgumentHelp("limit automatic pruning to n gigabytes", valueName: "n"))
   var pruneLimit: UInt = 100
 
@@ -51,6 +54,8 @@ struct Clone: AsyncParsableCommand {
     let ociStorage = try VMStorageOCI()
     let localStorage = try VMStorageLocal()
     let remoteName = try? RemoteName(sourceName)
+
+    try rejectExistingDestination(localStorage)
 
     if stacked {
       guard remoteName != nil else {
@@ -97,6 +102,8 @@ struct Clone: AsyncParsableCommand {
       // Acquire a global lock
       let lock = try FileLock(lockURL: Config().tartHomeDir)
       try lock.lock()
+
+      try rejectExistingDestination(localStorage)
 
       let sourceState = try sourceVM.state()
       let generateMAC = try localStorage.hasVMsWithMACAddress(macAddress: sourceVM.macAddress())
@@ -150,5 +157,11 @@ struct Clone: AsyncParsableCommand {
     }, onCancel: {
       try? tmpVMDir.removeFromDisk()
     })
+  }
+
+  private func rejectExistingDestination(_ localStorage: VMStorageLocal) throws {
+    if !overwrite && localStorage.exists(newName) {
+      throw ValidationError("VM \"\(newName)\" already exists, use --overwrite to replace it")
+    }
   }
 }
