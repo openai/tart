@@ -233,8 +233,14 @@ struct VMDirectory: Prunable {
   func resizeDisk(
     _ sizeGB: UInt16,
     format: DiskImageFormat = .raw,
-    contentStore: ContentStore? = nil
+    contentStore: ContentStore? = nil,
+    relocateRecovery: Bool = false
   ) throws {
+    if relocateRecovery {
+      try resizeDiskRelocatingRecovery(sizeGB)
+      return
+    }
+
     if isStackedVM {
       // Resolve the stack before taking the config.json PID lock. Reading
       // config.json after acquiring an fcntl lock would release that lock
@@ -273,9 +279,47 @@ struct VMDirectory: Prunable {
     }
   }
 
+  private func resizeDiskRelocatingRecovery(_ sizeGB: UInt16) throws {
+    let vmConfig = try VMConfig(fromURL: configURL)
+    guard isStandalone, vmConfig.os == .darwin, vmConfig.diskFormat == .raw else {
+      throw RuntimeError.FailedToResizeDisk("Recovery relocation requires a standalone raw macOS disk")
+    }
+    let attributes = try diskURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+    guard attributes.isRegularFile == true, attributes.isSymbolicLink != true else {
+      throw RuntimeError.FailedToResizeDisk("Recovery relocation requires a regular disk image file")
+    }
+
+    let lock = try lock()
+    guard try lock.trylock() else {
+      throw RuntimeError.VMConfigurationError("VM \"\(name)\" must be stopped before resizing its disk")
+    }
+    defer { try? lock.unlock() }
+    guard !FileManager.default.fileExists(atPath: stateURL.path) else {
+      throw RuntimeError.VMConfigurationError("VM \"\(name)\" must be stopped before resizing its disk")
+    }
+
+    let staging = try VMDirectory.temporary()
+    let stagingLock = try FileLock(lockURL: staging.baseURL)
+    try stagingLock.lock()
+    defer {
+      try? FileManager.default.removeItem(at: staging.baseURL)
+      withExtendedLifetime(stagingLock) {}
+    }
+    try MacOSDisk.resize(diskURL, to: UInt64(sizeGB) * 1_000_000_000, stagingURL: staging.diskURL)
+  }
+
   private func resizeExistingDisk(_ sizeGB: UInt16) throws {
     // Check if this is an ASIF disk by reading the VM config
     let vmConfig = try VMConfig(fromURL: configURL)
+
+    let lock = try lock()
+    guard try lock.trylock() else {
+      throw RuntimeError.VMConfigurationError("VM \"\(name)\" must be stopped before resizing its disk")
+    }
+    defer { try? lock.unlock() }
+    guard !FileManager.default.fileExists(atPath: stateURL.path) else {
+      throw RuntimeError.VMConfigurationError("VM \"\(name)\" must be stopped before resizing its disk")
+    }
 
     if vmConfig.diskFormat == .asif {
       try resizeASIFDisk(sizeGB)

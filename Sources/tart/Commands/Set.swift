@@ -37,7 +37,28 @@ struct Set: AsyncParsableCommand {
                              """))
   var diskSize: UInt16?
 
+  @Flag(help: "Move macOS Recovery to the end of the disk when using --disk-size (standalone raw disks only)")
+  var relocateRecovery: Bool = false
+
+  func validate() throws {
+    if relocateRecovery {
+      guard diskSize != nil else {
+        throw ValidationError("--relocate-recovery requires --disk-size")
+      }
+      guard disk == nil else {
+        throw ValidationError("--relocate-recovery cannot be combined with --disk")
+      }
+    }
+  }
+
   func run() async throws {
+    let storageLock = disk != nil || diskSize != nil
+      ? try FileLock(lockURL: Config().tartHomeDir) : nil
+    if let storageLock, try !storageLock.trylock() {
+      throw RuntimeError.VMConfigurationError("VM storage is busy; retry after the current operation finishes")
+    }
+    defer { withExtendedLifetime(storageLock) {} }
+
     let vmDir = try VMStorageLocal().open(name)
 
     // Replacing disk.img would leave a stacked VM with both disk.img and
@@ -48,6 +69,17 @@ struct Set: AsyncParsableCommand {
     }
 
     var vmConfig = try VMConfig(fromURL: vmDir.configURL)
+
+    if disk != nil || diskSize != nil {
+      guard try vmDir.state() == .Stopped else {
+        throw RuntimeError.VMConfigurationError("VM \"\(name)\" must be stopped before modifying its disk")
+      }
+    }
+    if relocateRecovery {
+      guard vmDir.isStandalone, vmConfig.os == .darwin, vmConfig.diskFormat == .raw else {
+        throw ValidationError("--relocate-recovery requires a standalone raw macOS disk")
+      }
+    }
 
     if let cpu = cpu {
       try vmConfig.setCPU(cpuCount: Int(cpu))
@@ -90,7 +122,7 @@ struct Set: AsyncParsableCommand {
     }
 
     if diskSize != nil {
-      try vmDir.resizeDisk(diskSize!)
+      try vmDir.resizeDisk(diskSize!, relocateRecovery: relocateRecovery)
     }
   }
 }
