@@ -55,50 +55,16 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
-  func testListSkipsVMsDeletedDuringMetadataLookup() async throws {
-    let digest = "sha256:" + String(repeating: "a", count: 64)
-    for sourceArguments in [[], ["--source", "local"], ["--source", "oci"]] {
-      for outputArguments in [["--format", "json"], [], ["--quiet"]] {
-        try await withTemporaryTartHome {
-          // diskutil runs after enumeration, making the deletion race deterministic.
-          let previousPath = try installUnavailableDiskutil(beforeFailure: "/bin/rm -rf \"${4%/*}\"")
-          defer { restoreEnvironment("PATH", to: previousPath) }
+  func testListSkipsLocalVMsDeletedDuringMetadataLookup() async throws {
+    try await assertListSurvivesDeletion(sourceArguments: ["--source", "local"])
+  }
 
-          let local = try VMStorageLocal()
-          let oci = try VMStorageOCI()
-          for (name, diskFormat) in [("disappearing", DiskImageFormat.asif), ("healthy", .raw)] {
-            let remoteName = try RemoteName("example.com/org/\(name)@\(digest)")
-            for vmDir in [try local.create(name), try oci.create(remoteName)] {
-              var vmConfig = config()
-              vmConfig.diskFormat = diskFormat
-              try vmConfig.save(toURL: vmDir.configURL)
-              XCTAssertTrue(FileManager.default.createFile(atPath: vmDir.nvramURL.path, contents: Data()))
-              XCTAssertTrue(FileManager.default.createFile(atPath: vmDir.diskURL.path, contents: Data()))
-            }
-          }
+  func testListSkipsOCIVMsDeletedDuringMetadataLookup() async throws {
+    try await assertListSurvivesDeletion(sourceArguments: ["--source", "oci"])
+  }
 
-          let arguments = sourceArguments + outputArguments
-          do {
-            let output = try await commandOutput(List.self, arguments)
-            let expectedNames = sourceArguments.isEmpty ? ["healthy", "example.com/org/healthy@\(digest)"] :
-              [sourceArguments.last == "local" ? "healthy" : "example.com/org/healthy@\(digest)"]
-            if outputArguments == ["--format", "json"] {
-              let rows = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [[String: Any]])
-              XCTAssertEqual(rows.compactMap { $0["Name"] as? String }, expectedNames)
-            } else if outputArguments == ["--quiet"] {
-              XCTAssertEqual(output.split(separator: "\n").map(String.init), expectedNames)
-            } else {
-              for name in expectedNames {
-                XCTAssertTrue(output.contains(name))
-              }
-              XCTAssertFalse(output.contains("disappearing"))
-            }
-          } catch {
-            XCTFail("list should survive deletion with \(arguments): \(error)")
-          }
-        }
-      }
-    }
+  func testListSkipsVMsDeletedDuringMetadataLookupAcrossSources() async throws {
+    try await assertListSurvivesDeletion(sourceArguments: [])
   }
 
   func testListPreservesMetadataPermissionErrors() async throws {
@@ -269,6 +235,46 @@ final class CommandBehaviorTests: XCTestCase {
       try lock.unlock()
       try Config().gc()
       XCTAssertFalse(FileManager.default.fileExists(atPath: temporaryVMDir.baseURL.path))
+    }
+  }
+
+  private func assertListSurvivesDeletion(sourceArguments: [String]) async throws {
+    let digest = "sha256:" + String(repeating: "a", count: 64)
+    for outputArguments in [["--format", "json"], [], ["--quiet"]] {
+      try await withTemporaryTartHome {
+        // diskutil runs after enumeration, making the deletion race deterministic.
+        let previousPath = try installUnavailableDiskutil(beforeFailure: "/bin/rm -rf \"${4%/*}\"")
+        defer { restoreEnvironment("PATH", to: previousPath) }
+
+        let local = try VMStorageLocal()
+        let oci = try VMStorageOCI()
+        for (name, diskFormat) in [("disappearing", DiskImageFormat.asif), ("healthy", .raw)] {
+          let remoteName = try RemoteName("example.com/org/\(name)@\(digest)")
+          for vmDir in [try local.create(name), try oci.create(remoteName)] {
+            var vmConfig = config()
+            vmConfig.diskFormat = diskFormat
+            try vmConfig.save(toURL: vmDir.configURL)
+            XCTAssertTrue(FileManager.default.createFile(atPath: vmDir.nvramURL.path, contents: Data()))
+            XCTAssertTrue(FileManager.default.createFile(atPath: vmDir.diskURL.path, contents: Data()))
+          }
+        }
+
+        let arguments = sourceArguments + outputArguments
+        let output = try await commandOutput(List.self, arguments)
+        let expectedNames = sourceArguments.isEmpty ? ["healthy", "example.com/org/healthy@\(digest)"] :
+          [sourceArguments.last == "local" ? "healthy" : "example.com/org/healthy@\(digest)"]
+        if outputArguments == ["--format", "json"] {
+          let rows = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [[String: Any]])
+          XCTAssertEqual(rows.compactMap { $0["Name"] as? String }, expectedNames)
+        } else if outputArguments == ["--quiet"] {
+          XCTAssertEqual(output.split(separator: "\n").map(String.init), expectedNames)
+        } else {
+          for name in expectedNames {
+            XCTAssertTrue(output.contains(name))
+          }
+          XCTAssertFalse(output.contains("disappearing"))
+        }
+      }
     }
   }
 
