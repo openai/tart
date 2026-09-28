@@ -11,7 +11,11 @@ struct MACAddress: Equatable, Hashable, CustomStringConvertible {
     }
 
     for (index, component) in components.enumerated() {
-      mac[index] = UInt8(component, radix: 16)!
+      guard let byte = UInt8(component, radix: 16) else {
+        return nil
+      }
+
+      mac[index] = byte
     }
   }
 

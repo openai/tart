@@ -132,7 +132,7 @@ And no worries, this file will be re-created on the next `tart run`.
 
 Due to the limitations of the macOS built-in DHCP server, `tart ip` is unable to correctly report the IP addresses for VMs using DHCP client identifiers that are not based on VMs link-layer addresses (MAC addresses).
 
-By default, when [no `--resolver=arp` is specified](#resolving-the-vms-ip-when-using-bridged-networking), `tart ip` reads the `/var/db/dhcpd_leases` file and tries to find the freshest entry that matches the VM's MAC address (based on the `hw_address` field).
+By default, when [no `--resolver=arp` is specified](#resolving-the-vms-ip-when-using-bridged-networking), `tart ip` first checks the `/etc/bootptab` file for a matching DHCP reservation. Otherwise, it reads the `/var/db/dhcpd_leases` file and tries to find the freshest entry that matches the VM's MAC address (based on the `hw_address` field).
 
 However, things starts to break when the VM uses a [DUID-EN](https://metebalci.com/blog/a-note-on-dhcpv6-duid-and-prefix-delegation#duid-types) identifier, for example. One of the notorious examples of this being Ubuntu, using this type of identifier by default on latest versions.  This results in the `/var/db/dhcpd_leases` entry for Ubuntu appearing as follows:
 

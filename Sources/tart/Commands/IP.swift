@@ -20,7 +20,7 @@ struct IP: AsyncParsableCommand {
 
   @Option(help: ArgumentHelp("Strategy for resolving IP address",
                              discussion: """
-                             By default, Tart is using a "dhcp" resolver which parses the DHCP lease file on host and tries to find an entry containing the VM's MAC address. This method is fast and the most reliable, but only works for VMs are not using the bridged networking.\n
+                             By default, Tart is using a "dhcp" resolver which parses the DHCP reservation file, then the lease file on host and tries to find an entry containing the VM's MAC address. This method is fast and the most reliable, but only works for VMs not using the bridged networking.\n
                              Alternatively, Tart has an "arp" resolver which calls an external "arp" executable and parses it's output. This works for VMs using bridged networking and returns their IP, but when they generate enough network activity to populate the host's ARP table. Note that "arp" strategy won't work for VMs using the Softnet networking.\n
                              A third strategy, "agent" works in all cases reliably, but requires Guest agent for Tart VMs (https://github.com/cirruslabs/tart-guest-agent) to be installed inside of a VM.
                              """))
@@ -60,6 +60,9 @@ struct IP: AsyncParsableCommand {
           return ip
         }
       case .dhcp:
+        if let bootptab = try Bootptab(), let ip = try bootptab.ResolveMACAddress(macAddress: vmMACAddress) {
+          return ip
+        }
         if let leases = try Leases(), let ip = leases.ResolveMACAddress(macAddress: vmMACAddress) {
           return ip
         }
