@@ -428,7 +428,7 @@ struct Run: AsyncParsableCommand {
       try vmDir.regenerateMACAddress()
     }
 
-    if (netSoftnet || netHost) && isInteractiveSession() {
+    if netSoftnet && isInteractiveSession() {
       try Softnet.configureSUIDBitIfNeeded()
     }
 
@@ -703,9 +703,11 @@ struct Run: AsyncParsableCommand {
     }
 
     if netHost {
-      let config = try VMConfig.init(fromURL: vmDir.configURL)
+      guard #available(macOS 26, *) else {
+        throw ValidationError("--net-host requires macOS 26 (Tahoe) or newer")
+      }
 
-      return try Softnet(vmMACAddress: config.macAddress.string, extraArguments: ["--vm-net-type", "host"] + softnetExtraArguments, controlFD: netSoftnetControlFd)
+      return try NetworkHost()
     }
 
     if netBridged.count > 0 {
