@@ -18,6 +18,11 @@ struct Bootptab {
     }
 
     for line in contents.split(whereSeparator: \.isNewline) {
+      // Skip comment lines
+      guard !line.hasPrefix("#") else {
+        continue
+      }
+
       let fields = line.split(whereSeparator: \.isWhitespace)
 
       // Skip lines that don't look like reservation fields

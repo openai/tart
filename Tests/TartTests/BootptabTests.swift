@@ -3,6 +3,37 @@ import Network
 @testable import tart
 
 final class BootptabTests: XCTestCase {
+  func testCommentedReservation() throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let contents = """
+    %
+    #client1 1 02:ab:00:01:02:03 192.168.64.2
+    """
+    try contents.write(to: url, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    let bootptab = try XCTUnwrap(Bootptab(url))
+
+    XCTAssertNil(try bootptab.ResolveMACAddress(
+      macAddress: MACAddress(fromString: "02:ab:00:01:02:03")!))
+  }
+
+  func testCommentedReservationWithActiveReservation() throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let contents = """
+    %
+    #client1 1 02:ab:00:01:02:03 192.168.64.2
+    client1 1 02:ab:00:01:02:03 192.168.64.3
+    """
+    try contents.write(to: url, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    let bootptab = try XCTUnwrap(Bootptab(url))
+
+    XCTAssertEqual(try bootptab.ResolveMACAddress(
+      macAddress: MACAddress(fromString: "02:ab:00:01:02:03")!), IPv4Address("192.168.64.3"))
+  }
+
   func testResolveMACAddress() throws {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
 
