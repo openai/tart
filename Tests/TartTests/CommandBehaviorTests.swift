@@ -55,6 +55,45 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testListSkipsLocalVMsDeletedDuringMetadataLookup() async throws {
+    try await assertListSurvivesDeletion(sourceArguments: ["--source", "local"])
+  }
+
+  func testListSkipsOCIVMsDeletedDuringMetadataLookup() async throws {
+    try await assertListSurvivesDeletion(sourceArguments: ["--source", "oci"])
+  }
+
+  func testListSkipsVMsDeletedDuringMetadataLookupAcrossSources() async throws {
+    try await assertListSurvivesDeletion(sourceArguments: [])
+  }
+
+  func testListPreservesMetadataPermissionErrors() async throws {
+    for source in ["local", "oci"] {
+      try await withTemporaryTartHome {
+        let vmDir = try source == "local" ? VMStorageLocal().create("inaccessible") :
+          VMStorageOCI().create(RemoteName("example.com/org/inaccessible:latest"))
+        var vmConfig = config()
+        vmConfig.diskFormat = .asif
+        try vmConfig.save(toURL: vmDir.configURL)
+        XCTAssertTrue(FileManager.default.createFile(atPath: vmDir.nvramURL.path, contents: Data()))
+        XCTAssertTrue(FileManager.default.createFile(atPath: vmDir.diskURL.path, contents: Data()))
+        defer {
+          try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: vmDir.baseURL.path)
+        }
+
+        let previousPath = try installUnavailableDiskutil(beforeFailure: "/bin/chmod 000 \"${4%/*}\"")
+        defer { restoreEnvironment("PATH", to: previousPath) }
+        do {
+          _ = try await commandOutput(List.self, ["--source", source, "--format", "json"])
+          XCTFail("list should report metadata permission errors")
+        } catch {
+          XCTAssertEqual((error as NSError).domain, NSCocoaErrorDomain)
+          XCTAssertEqual((error as NSError).code, NSFileReadNoPermissionError)
+        }
+      }
+    }
+  }
+
   func testGetSurvivesUnavailableDiskCapacity() async throws {
     try await withTemporaryTartHome {
       let previousPath = try installUnavailableDiskutil()
@@ -253,6 +292,46 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  private func assertListSurvivesDeletion(sourceArguments: [String]) async throws {
+    let digest = "sha256:" + String(repeating: "a", count: 64)
+    for outputArguments in [["--format", "json"], [], ["--quiet"]] {
+      try await withTemporaryTartHome {
+        // diskutil runs after enumeration, making the deletion race deterministic.
+        let previousPath = try installUnavailableDiskutil(beforeFailure: "/bin/rm -rf \"${4%/*}\"")
+        defer { restoreEnvironment("PATH", to: previousPath) }
+
+        let local = try VMStorageLocal()
+        let oci = try VMStorageOCI()
+        for (name, diskFormat) in [("disappearing", DiskImageFormat.asif), ("healthy", .raw)] {
+          let remoteName = try RemoteName("example.com/org/\(name)@\(digest)")
+          for vmDir in [try local.create(name), try oci.create(remoteName)] {
+            var vmConfig = config()
+            vmConfig.diskFormat = diskFormat
+            try vmConfig.save(toURL: vmDir.configURL)
+            XCTAssertTrue(FileManager.default.createFile(atPath: vmDir.nvramURL.path, contents: Data()))
+            XCTAssertTrue(FileManager.default.createFile(atPath: vmDir.diskURL.path, contents: Data()))
+          }
+        }
+
+        let arguments = sourceArguments + outputArguments
+        let output = try await commandOutput(List.self, arguments)
+        let expectedNames = sourceArguments.isEmpty ? ["healthy", "example.com/org/healthy@\(digest)"] :
+          [sourceArguments.last == "local" ? "healthy" : "example.com/org/healthy@\(digest)"]
+        if outputArguments == ["--format", "json"] {
+          let rows = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [[String: Any]])
+          XCTAssertEqual(rows.compactMap { $0["Name"] as? String }, expectedNames)
+        } else if outputArguments == ["--quiet"] {
+          XCTAssertEqual(output.split(separator: "\n").map(String.init), expectedNames)
+        } else {
+          for name in expectedNames {
+            XCTAssertTrue(output.contains(name))
+          }
+          XCTAssertFalse(output.contains("disappearing"))
+        }
+      }
+    }
+  }
+
   private func config() -> VMConfig {
     VMConfig(
       platform: Linux(),
@@ -277,11 +356,12 @@ final class CommandBehaviorTests: XCTestCase {
     )
   }
 
-  private func installUnavailableDiskutil() throws -> String? {
+  private func installUnavailableDiskutil(beforeFailure: String = "") throws -> String? {
     let binDirectory = try temporaryDirectory()
     let diskutilURL = binDirectory.appendingPathComponent("diskutil")
     let script = """
     #!/bin/sh
+    \(beforeFailure)
     echo 'Resource temporarily unavailable' >&2
     exit 1
     """

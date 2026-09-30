@@ -38,31 +38,47 @@ struct List: AsyncParsableCommand {
     var infos: [VMInfo] = []
 
     if source == nil || source == "local" {
-      infos += sortedInfos(try VMStorageLocal().list().map { (name, vmDir) in
-        try VMInfo(
-          Source: "local",
-          Name: name,
-          // ASIF capacity lookup can fail while a running VM holds the disk open.
-          Disk: HumanReadableByteCount(try? vmDir.diskSizeBytes()) { $0 / 1000 / 1000 / 1000 },
-          Size: HumanReadableByteCount(try vmDir.allocatedSizeBytes()) { $0 / 1000 / 1000 / 1000 },
-          Accessed: formatAccessDate(try vmDir.accessDate()),
-          Running: vmDir.running(),
-          State: vmDir.state().rawValue
-        )
+      infos += sortedInfos(try VMStorageLocal().list().compactMap { (name, vmDir) -> VMInfo? in
+        do {
+          return try VMInfo(
+            Source: "local",
+            Name: name,
+            // ASIF capacity lookup can fail while a running VM holds the disk open.
+            Disk: HumanReadableByteCount(try? vmDir.diskSizeBytes()) { $0 / 1000 / 1000 / 1000 },
+            Size: HumanReadableByteCount(try vmDir.allocatedSizeBytes()) { $0 / 1000 / 1000 / 1000 },
+            Accessed: formatAccessDate(try vmDir.accessDate()),
+            Running: vmDir.running(),
+            State: vmDir.state().rawValue
+          )
+        } catch {
+          // A VM can disappear after storage enumeration when another process deletes it.
+          if error.isFileNotFound() {
+            return nil
+          }
+          throw error
+        }
       })
     }
 
     if source == nil || source == "oci" {
-      infos += sortedInfos(try VMStorageOCI().list().map { (name, vmDir, _) in
-        try VMInfo(
-          Source: "OCI",
-          Name: name,
-          Disk: HumanReadableByteCount(try? vmDir.diskSizeBytes()) { $0 / 1000 / 1000 / 1000 },
-          Size: HumanReadableByteCount(try vmDir.allocatedSizeBytes()) { $0 / 1000 / 1000 / 1000 },
-          Accessed: formatAccessDate(try vmDir.accessDate()),
-          Running: vmDir.running(),
-          State: vmDir.state().rawValue
-        )
+      infos += sortedInfos(try VMStorageOCI().list().compactMap { (name, vmDir, _) -> VMInfo? in
+        do {
+          return try VMInfo(
+            Source: "OCI",
+            Name: name,
+            Disk: HumanReadableByteCount(try? vmDir.diskSizeBytes()) { $0 / 1000 / 1000 / 1000 },
+            Size: HumanReadableByteCount(try vmDir.allocatedSizeBytes()) { $0 / 1000 / 1000 / 1000 },
+            Accessed: formatAccessDate(try vmDir.accessDate()),
+            Running: vmDir.running(),
+            State: vmDir.state().rawValue
+          )
+        } catch {
+          // A VM can disappear after storage enumeration when another process deletes it.
+          if error.isFileNotFound() {
+            return nil
+          }
+          throw error
+        }
       })
     }
 
