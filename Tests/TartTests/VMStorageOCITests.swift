@@ -73,7 +73,10 @@ final class VMStorageOCITests: XCTestCase {
 
   func testListIncludesStackedCachedImage() throws {
     try withTemporaryTartHome {
-      let manifest = try stackedManifest()
+      let manifest = try stackedManifest(
+        baseContentDigest: "sha256:" + String(repeating: "a", count: 64),
+        overlayContentDigest: "sha256:" + String(repeating: "b", count: 64)
+      )
       let name = try digestName(for: manifest)
       let storage = try VMStorageOCI()
       let record = try storage.create(name)
@@ -84,6 +87,35 @@ final class VMStorageOCITests: XCTestCase {
       XCTAssertTrue(try storage.list().contains { $0.0 == name.description })
       XCTAssertEqual(try record.diskSizeBytes(), 4096)
       XCTAssertNoThrow(try record.allocatedSizeBytes())
+    }
+  }
+
+  func testListIncludesCachedImageWithPortInHost() throws {
+    try withTemporaryTartHome {
+      let manifest = try stackedManifest(
+        baseContentDigest: "sha256:" + String(repeating: "c", count: 64),
+        overlayContentDigest: "sha256:" + String(repeating: "d", count: 64)
+      )
+      let digestName = try digestName(for: manifest)
+      let name = RemoteName(
+        host: "registry.example.com:5000",
+        namespace: digestName.namespace,
+        reference: digestName.reference
+      )
+      let storage = try VMStorageOCI()
+      let record = try storage.create(name)
+      try config().save(toURL: record.configURL)
+      XCTAssertTrue(FileManager.default.createFile(atPath: record.nvramURL.path, contents: Data()))
+      try manifest.toJSON().write(to: record.manifestURL)
+      let tagName = RemoteName(host: name.host, namespace: name.namespace, reference: Reference(tag: "latest"))
+      try storage.link(from: tagName, to: name)
+
+      let listed = try XCTUnwrap(storage.list().first { $0.0 == name.description })
+      XCTAssertEqual(listed.1.url.standardizedFileURL, record.url.standardizedFileURL)
+      XCTAssertFalse(listed.2)
+      let listedTag = try XCTUnwrap(storage.list().first { $0.0 == tagName.description })
+      XCTAssertTrue(listedTag.2)
+      XCTAssertTrue(try storage.prunables().contains { $0.url.standardizedFileURL == record.url.standardizedFileURL })
     }
   }
 
@@ -348,8 +380,14 @@ final class VMStorageOCITests: XCTestCase {
   func testTagReplacementWaitsForPruneLock() throws {
     try withTemporaryTartHome {
       let storage = try VMStorageOCI()
-      let firstManifest = try stackedManifest(baseContentDigest: "sha256:first")
-      let secondManifest = try stackedManifest(baseContentDigest: "sha256:second")
+      let firstManifest = try stackedManifest(
+        baseContentDigest: "sha256:" + String(repeating: "1", count: 64),
+        overlayContentDigest: "sha256:" + String(repeating: "2", count: 64)
+      )
+      let secondManifest = try stackedManifest(
+        baseContentDigest: "sha256:" + String(repeating: "3", count: 64),
+        overlayContentDigest: "sha256:" + String(repeating: "4", count: 64)
+      )
       let firstName = try digestName(for: firstManifest)
       let secondName = try digestName(for: secondManifest)
       _ = try createRecord(for: firstManifest, in: storage)
@@ -728,6 +766,237 @@ final class VMStorageOCITests: XCTestCase {
       XCTAssertFalse(FileManager.default.fileExists(atPath: unrelated.url.path))
       XCTAssertTrue(FileManager.default.fileExists(atPath: sharedBase.url.path))
     }
+  }
+
+  func testPruningCachedImageRemovesOnlyItsTagSymlink() throws {
+    try withTemporaryTartHome {
+      let storage = try VMStorageOCI()
+      // Content digests are validated when manifests are scanned for pruning.
+      // Use syntactically valid digests here; the test only exercises record
+      // and tag-symlink cleanup, not content installation.
+      let deletedManifest = try stackedManifest(
+        baseContentDigest: "sha256:" + String(repeating: "a", count: 64),
+        overlayContentDigest: "sha256:" + String(repeating: "e", count: 64)
+      )
+      let retainedManifest = try stackedManifest(
+        baseContentDigest: "sha256:" + String(repeating: "b", count: 64),
+        overlayContentDigest: "sha256:" + String(repeating: "f", count: 64)
+      )
+      let deletedName = try digestName(for: deletedManifest)
+      let deletedRecord = try createRecord(for: deletedManifest, in: storage)
+      let tagName = RemoteName(host: "example.com", namespace: "org/image", reference: Reference(tag: "deleted"))
+      let tagURL = storage.baseURL.appendingRemoteName(tagName)
+      try storage.link(from: tagName, to: deletedName)
+      let retainedRecord = try createRecord(for: retainedManifest, in: storage)
+      let retainedTagName = RemoteName(host: "example.com", namespace: "org/image", reference: Reference(tag: "retained"))
+      let retainedTagURL = storage.baseURL.appendingRemoteName(retainedTagName)
+      try storage.link(from: retainedTagName, to: try digestName(for: retainedManifest))
+      try deletedRecord.url.updateAccessDate(Date(timeIntervalSince1970: 1))
+
+      try Prune.pruneOlderThan(
+        prunableStorages: [storage],
+        olderThanDate: Date(timeIntervalSince1970: 2)
+      )
+
+      XCTAssertFalse(FileManager.default.fileExists(atPath: deletedRecord.url.path))
+      XCTAssertFalse((try? tagURL.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) ?? false)
+      XCTAssertTrue(FileManager.default.fileExists(atPath: retainedRecord.url.path))
+      XCTAssertTrue(FileManager.default.fileExists(atPath: retainedTagURL.path))
+    }
+  }
+
+  func testSpaceBudgetPruningCachedImageRemovesOnlyItsTagSymlink() throws {
+    try withTemporaryTartHome {
+      let storage = try VMStorageOCI()
+      let deletedManifest = try stackedManifest(
+        baseContentDigest: "sha256:" + String(repeating: "c", count: 64),
+        overlayContentDigest: "sha256:" + String(repeating: "0", count: 64)
+      )
+      let retainedManifest = try stackedManifest(
+        baseContentDigest: "sha256:" + String(repeating: "d", count: 64),
+        overlayContentDigest: "sha256:" + String(repeating: "1", count: 64)
+      )
+      let deletedName = try digestName(for: deletedManifest)
+      let deletedRecord = try createRecord(for: deletedManifest, in: storage)
+      let tagName = RemoteName(host: "example.com", namespace: "org/image", reference: Reference(tag: "deleted"))
+      let tagURL = storage.baseURL.appendingRemoteName(tagName)
+      try storage.link(from: tagName, to: deletedName)
+      let retainedRecord = try createRecord(for: retainedManifest, in: storage)
+      let retainedTagName = RemoteName(host: "example.com", namespace: "org/image", reference: Reference(tag: "retained"))
+      let retainedTagURL = storage.baseURL.appendingRemoteName(retainedTagName)
+      try storage.link(from: retainedTagName, to: try digestName(for: retainedManifest))
+      try deletedRecord.url.updateAccessDate(Date(timeIntervalSince1970: 1))
+      try retainedRecord.url.updateAccessDate(Date(timeIntervalSince1970: 2))
+      let retainedSize = UInt64(try retainedRecord.allocatedSizeBytes())
+
+      try Prune.pruneSpaceBudget(prunableStorages: [storage], spaceBudgetBytes: retainedSize)
+
+      XCTAssertFalse(FileManager.default.fileExists(atPath: deletedRecord.url.path))
+      XCTAssertFalse((try? tagURL.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) ?? false)
+      XCTAssertTrue(FileManager.default.fileExists(atPath: retainedRecord.url.path))
+      XCTAssertTrue(FileManager.default.fileExists(atPath: retainedTagURL.path))
+    }
+  }
+
+  func testGCRunBeforeSpaceBudgetPruningDoesNotLeaveBrokenTagSymlink() throws {
+    try withTemporaryTartHome {
+      let storage = try VMStorageOCI()
+      let manifest = try stackedManifest(
+        baseContentDigest: "sha256:" + String(repeating: "a", count: 64),
+        overlayContentDigest: "sha256:" + String(repeating: "b", count: 64)
+      )
+      let name = try digestName(for: manifest)
+      let record = try createRecord(for: manifest, in: storage)
+      let tagName = RemoteName(host: name.host, namespace: name.namespace, reference: Reference(tag: "latest"))
+      let tagURL = storage.baseURL.appendingRemoteName(tagName)
+      try storage.link(from: tagName, to: name)
+
+      try storage.gc()
+      try Prune.pruneSpaceBudget(prunableStorages: [storage], spaceBudgetBytes: 0)
+
+      XCTAssertFalse(FileManager.default.fileExists(atPath: record.url.path))
+      XCTAssertFalse((try? tagURL.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) ?? false)
+    }
+  }
+
+  func testAgePruningDeletesMultipleOldCachedImagesWithoutStaleCandidates() throws {
+    try withTemporaryTartHome {
+      let storage = try VMStorageOCI()
+      let oldManifests = [
+        try stackedManifest(
+          baseContentDigest: "sha256:" + String(repeating: "a", count: 64),
+          overlayContentDigest: "sha256:" + String(repeating: "c", count: 64)
+        ),
+        try stackedManifest(
+          baseContentDigest: "sha256:" + String(repeating: "b", count: 64),
+          overlayContentDigest: "sha256:" + String(repeating: "d", count: 64)
+        )
+      ]
+      let oldRecords = try oldManifests.map { try createRecord(for: $0, in: storage) }
+      for (index, record) in oldRecords.enumerated() {
+        try record.url.updateAccessDate(Date(timeIntervalSince1970: TimeInterval(index + 1)))
+      }
+
+      try Prune.pruneOlderThan(
+        prunableStorages: [storage],
+        olderThanDate: Date(timeIntervalSince1970: 3)
+      )
+
+      for record in oldRecords {
+        XCTAssertFalse(FileManager.default.fileExists(atPath: record.url.path))
+      }
+    }
+  }
+
+  func testAgePruningKeepsNewerUntaggedCachedImage() throws {
+    try withTemporaryTartHome {
+      let storage = try VMStorageOCI()
+      let old = try createRecord(for: stackedManifest(
+        baseContentDigest: "sha256:" + String(repeating: "a", count: 64),
+        overlayContentDigest: "sha256:" + String(repeating: "c", count: 64)
+      ), in: storage)
+      let newer = try createRecord(for: stackedManifest(
+        baseContentDigest: "sha256:" + String(repeating: "b", count: 64),
+        overlayContentDigest: "sha256:" + String(repeating: "d", count: 64)
+      ), in: storage)
+      try old.url.updateAccessDate(Date(timeIntervalSince1970: 1))
+      try newer.url.updateAccessDate(Date(timeIntervalSince1970: 3))
+
+      try Prune.pruneOlderThan(
+        prunableStorages: [storage],
+        olderThanDate: Date(timeIntervalSince1970: 2)
+      )
+
+      XCTAssertFalse(FileManager.default.fileExists(atPath: old.url.path))
+      XCTAssertTrue(FileManager.default.fileExists(atPath: newer.url.path))
+    }
+  }
+
+  func testCachedImagePruningWaitsForPruneLock() throws {
+    try withTemporaryTartHome {
+      let storage = try VMStorageOCI()
+      let manifest = try stackedManifest(
+        baseContentDigest: "sha256:" + String(repeating: "1", count: 64),
+        overlayContentDigest: "sha256:" + String(repeating: "2", count: 64)
+      )
+      let record = try createRecord(for: manifest, in: storage)
+      let name = try digestName(for: manifest)
+      let tagName = RemoteName(
+        host: name.host,
+        namespace: name.namespace,
+        reference: Reference(tag: "latest")
+      )
+      try storage.link(from: tagName, to: name)
+      let prunables = try storage.prunables()
+      let prunable = try XCTUnwrap(prunables.first { $0.url == record.url })
+
+      let contentStore = try ContentStore()
+      let lockHeld = DispatchSemaphore(value: 0)
+      let releaseLock = DispatchSemaphore(value: 0)
+      let deletionFinished = DispatchSemaphore(value: 0)
+
+      DispatchQueue.global().async {
+        try? contentStore.withPruneLock {
+          lockHeld.signal()
+          releaseLock.wait()
+        }
+      }
+      XCTAssertEqual(lockHeld.wait(timeout: .now() + 1), .success)
+
+      DispatchQueue.global().async {
+        try? prunable.delete()
+        deletionFinished.signal()
+      }
+      XCTAssertEqual(deletionFinished.wait(timeout: .now() + 0.1), .timedOut)
+
+      releaseLock.signal()
+      XCTAssertEqual(deletionFinished.wait(timeout: .now() + 1), .success)
+      XCTAssertFalse(FileManager.default.fileExists(atPath: record.url.path))
+      XCTAssertFalse((try? storage.baseURL.appendingRemoteName(tagName)
+        .resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) ?? false)
+    }
+  }
+
+  func testPruningCachedImageRemovesTagSymlinkWhenTartHomeIsSymlinked() throws {
+    let realHome = try temporaryDirectory()
+    let symlinkedHome = realHome.deletingLastPathComponent()
+      .appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createSymbolicLink(at: symlinkedHome, withDestinationURL: realHome)
+
+    let previousHome = ProcessInfo.processInfo.environment["TART_HOME"]
+    setenv("TART_HOME", symlinkedHome.path, 1)
+    defer {
+      if let previousHome {
+        setenv("TART_HOME", previousHome, 1)
+      } else {
+        unsetenv("TART_HOME")
+      }
+      try? FileManager.default.removeItem(at: symlinkedHome)
+    }
+
+    let storage = try VMStorageOCI()
+    let manifest = try stackedManifest(
+      baseContentDigest: "sha256:" + String(repeating: "3", count: 64),
+      overlayContentDigest: "sha256:" + String(repeating: "4", count: 64)
+    )
+    let name = try digestName(for: manifest)
+    let record = try createRecord(for: manifest, in: storage)
+    let tagName = RemoteName(
+      host: name.host,
+      namespace: name.namespace,
+      reference: Reference(tag: "latest")
+    )
+    let tagURL = storage.baseURL.appendingRemoteName(tagName)
+    try storage.link(from: tagName, to: name)
+    try record.url.updateAccessDate(Date(timeIntervalSince1970: 1))
+
+    try Prune.pruneOlderThan(
+      prunableStorages: [storage],
+      olderThanDate: Date(timeIntervalSince1970: 2)
+    )
+
+    XCTAssertFalse(FileManager.default.fileExists(atPath: record.url.path))
+    XCTAssertFalse((try? tagURL.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) ?? false)
   }
 
   #if canImport(DiskImageKit)

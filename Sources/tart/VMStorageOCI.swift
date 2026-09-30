@@ -283,6 +283,39 @@ class VMStorageOCI: PrunableStorage {
     }
   }
 
+  private func resolvedPath(_ url: URL) -> String {
+    url.standardizedFileURL.resolvingSymlinksInPath().standardizedFileURL.path
+  }
+
+  /// Find tag links to a cached image before its directory is removed.
+  fileprivate func tagSymlinks(pointingTo targetURL: URL) throws -> [URL] {
+    let targetPath = resolvedPath(targetURL)
+    return try list().compactMap { (_, vmDir, isSymlink) in
+      guard isSymlink, resolvedPath(vmDir.baseURL) == targetPath else {
+        return nil
+      }
+
+      return vmDir.baseURL
+    }
+  }
+
+  /// Remove only links that still point at the deleted cached image.
+  fileprivate func removeTagSymlinks(at urls: [URL], pointingTo targetURL: URL) throws {
+    let targetPath = resolvedPath(targetURL)
+    for url in urls {
+      guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: url.path) else {
+        continue
+      }
+
+      let destinationURL = URL(fileURLWithPath: destination, relativeTo: url.deletingLastPathComponent())
+      guard resolvedPath(destinationURL) == targetPath else {
+        continue
+      }
+
+      try FileManager.default.removeItem(at: url)
+    }
+  }
+
   func list() throws -> [(String, VMDirectory, Bool)] {
     var result: [(String, VMDirectory, Bool)] = Array()
 
@@ -291,30 +324,27 @@ class VMStorageOCI: PrunableStorage {
       return []
     }
 
-    for case let foundURL as URL in enumerator {
+    for case let relativeURL as URL in enumerator {
+      let foundPath = URL(fileURLWithPath: relativeURL.relativePath, relativeTo: baseURL).standardizedFileURL.path
+      // standardizing an existing directory infers its directory hint again.
+      let foundURL = URL(fileURLWithPath: foundPath, isDirectory: false)
       let vmDir = VMDirectory(baseURL: foundURL)
 
       if !vmDir.isCachedImage {
         continue
       }
 
-      // Split the relative VM's path at the last component
-      // and figure out which character should be used
-      // to join them together, either ":" for tags or
-      // "@" for hashes
-      let parts = [foundURL.deletingLastPathComponent().relativePath, foundURL.lastPathComponent]
-      var name: String
-
-      let isSymlink = try foundURL.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink!
-      if isSymlink {
-        name = parts.joined(separator: ":")
-      } else {
-        name = parts.joined(separator: "@")
+      let relativePath = relativeURL.relativePath
+      guard let separatorIndex = relativePath.lastIndex(of: "/") else {
+        continue
       }
-
-      // Remove the percent-encoding, if any
-      name = percentDecode(name)
-
+      let parts = [
+        String(relativePath[..<separatorIndex]),
+        String(relativePath[relativePath.index(after: separatorIndex)...])
+      ]
+      let isSymlink = try foundURL.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink!
+      let separator = isSymlink ? ":" : "@"
+      let name = percentDecode(parts.joined(separator: separator))
       result.append((name, vmDir, isSymlink))
     }
 
@@ -829,10 +859,15 @@ private struct CachedImagePrunable: Prunable {
   }
 
   func delete() throws {
-    try vmDir.delete()
-    // Deleting a record can make attributed content unreferenced. Run GC now
-    // so one prune invocation reclaims those bytes.
-    try VMStorageOCI().gcContent()
+    let storage = try VMStorageOCI()
+    let contentStore = try ContentStore()
+    try contentStore.withPruneLock {
+      let tagSymlinks = try storage.tagSymlinks(pointingTo: vmDir.url)
+      try vmDir.deleteHoldingPruneLock()
+      try storage.removeTagSymlinks(at: tagSymlinks, pointingTo: vmDir.url)
+    }
+
+    try storage.gcContent()
   }
 
   func accessDate() throws -> Date {
