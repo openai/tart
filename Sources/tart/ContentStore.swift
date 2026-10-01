@@ -18,17 +18,19 @@ struct ContentStore {
   private let digestDirectoryURL: URL
   private let pruneLockURL: URL
 
-  init() throws {
-    try self.init(baseURL: Config().tartCacheDir.appendingPathComponent("content", isDirectory: true))
+  init(readOnly: Bool = false) throws {
+    try self.init(baseURL: Config(readOnly: readOnly).tartCacheDir.appendingPathComponent("content", isDirectory: true), readOnly: readOnly)
   }
 
-  init(baseURL: URL) throws {
+  init(baseURL: URL, readOnly: Bool = false) throws {
     self.baseURL = baseURL
     self.digestDirectoryURL = baseURL.appendingPathComponent(Self.digestAlgorithm, isDirectory: true)
     self.pruneLockURL = baseURL.appendingPathComponent(".gc.lock")
-    try FileManager.default.createDirectory(at: digestDirectoryURL, withIntermediateDirectories: true)
-    if !FileManager.default.fileExists(atPath: pruneLockURL.path) {
-      _ = FileManager.default.createFile(atPath: pruneLockURL.path, contents: Data())
+    if !readOnly {
+      try FileManager.default.createDirectory(at: digestDirectoryURL, withIntermediateDirectories: true)
+      if !FileManager.default.fileExists(atPath: pruneLockURL.path) {
+        _ = FileManager.default.createFile(atPath: pruneLockURL.path, contents: Data())
+      }
     }
   }
 

@@ -5,12 +5,14 @@ struct Config {
   let tartCacheDir: URL
   let tartTmpDir: URL
 
-  init() throws {
+  init(readOnly: Bool = false) throws {
     var tartHomeDir: URL
 
     if let customTartHome = ProcessInfo.processInfo.environment["TART_HOME"] {
       tartHomeDir = URL(fileURLWithPath: customTartHome, isDirectory: true)
-      try Self.validateTartHome(url: tartHomeDir)
+      if !readOnly {
+        try Self.validateTartHome(url: tartHomeDir)
+      }
     } else {
       tartHomeDir = FileManager.default
         .homeDirectoryForCurrentUser
@@ -19,10 +21,14 @@ struct Config {
     self.tartHomeDir = tartHomeDir
 
     tartCacheDir = tartHomeDir.appendingPathComponent("cache", isDirectory: true)
-    try FileManager.default.createDirectory(at: tartCacheDir, withIntermediateDirectories: true)
+    if !readOnly {
+      try FileManager.default.createDirectory(at: tartCacheDir, withIntermediateDirectories: true)
+    }
 
     tartTmpDir = tartHomeDir.appendingPathComponent("tmp", isDirectory: true)
-    try FileManager.default.createDirectory(at: tartTmpDir, withIntermediateDirectories: true)
+    if !readOnly {
+      try FileManager.default.createDirectory(at: tartTmpDir, withIntermediateDirectories: true)
+    }
   }
 
   func gc() throws {
