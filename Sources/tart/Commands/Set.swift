@@ -14,7 +14,7 @@ struct Set: AsyncParsableCommand {
   @Option(help: "VM memory size in megabytes")
   var memory: UInt64?
 
-  @Option(help: "VM display resolution in a format of WIDTHxHEIGHT[pt|px]. For example, 1200x800, 1200x800pt or 1920x1080px. Units are treated as hints and default to \"pt\" (points) for macOS VMs and \"px\" (pixels) for Linux VMs when not specified.")
+  @Option(help: "VM display resolution in a format of WIDTHxHEIGHT[pt|px][@PPI]. For example, 1200x800, 1200x800pt, 1920x1080px or 3200x1800px@220. Units are treated as hints and default to \"pt\" (points) for macOS VMs and \"px\" (pixels) for Linux VMs when not specified. The optional @PPI (pixels-per-inch) hint applies to pixel-unit displays and, at a Retina-class value such as 220, makes a macOS guest expose a HiDPI (2x) mode regardless of the host display; it defaults to 72 (non-Retina) when omitted.")
   var display: VMDisplayConfig?
 
   @Flag(inversion: .prefixedNo, help: ArgumentHelp("Whether to automatically reconfigure the VM's display to fit the window"))
@@ -65,6 +65,7 @@ struct Set: AsyncParsableCommand {
         vmConfig.display.height = display.height
       }
       vmConfig.display.unit = display.unit
+      vmConfig.display.ppi = display.ppi
     }
 
     vmConfig.displayRefit = displayRefit
@@ -99,6 +100,16 @@ extension VMDisplayConfig: ExpressibleByArgument {
   public init(argument: String) {
     var argument = argument
     var unit: Unit? = nil
+    var ppi: Int? = nil
+
+    // Optional "@PPI" pixels-per-inch hint, e.g. "3200x1800px@220". Parsed
+    // before the unit suffix since it always trails the whole spec. Only a
+    // positive value is kept; zero/negative (or non-numeric) is ignored so the
+    // display falls back to the 72 default rather than a broken configuration.
+    if let atIndex = argument.lastIndex(of: "@") {
+      ppi = Int(argument[argument.index(after: atIndex)...]).flatMap { $0 > 0 ? $0 : nil }
+      argument = String(argument[..<atIndex])
+    }
 
     if argument.hasSuffix(Unit.pixel.rawValue) {
       argument = String(argument.dropLast(Unit.pixel.rawValue.count))
@@ -115,6 +126,7 @@ extension VMDisplayConfig: ExpressibleByArgument {
       width: parts[safe: 0] ?? 0,
       height: parts[safe: 1] ?? 0,
       unit: unit,
+      ppi: ppi,
     )
   }
 }
