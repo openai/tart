@@ -88,51 +88,7 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
   }
 
   static func retrieveIPSW(remoteURL: URL) async throws -> URL {
-    // Check if we already have this IPSW in cache
-    var headRequest = URLRequest(url: remoteURL)
-    headRequest.httpMethod = "HEAD"
-    let (_, headResponse) = try await Fetcher.fetch(headRequest, viaFile: false)
-
-    if let hash = headResponse.value(forHTTPHeaderField: "x-amz-meta-digest-sha256") {
-      let ipswLocation = try IPSWCache().locationFor(fileName: "sha256:\(hash).ipsw")
-
-      if FileManager.default.fileExists(atPath: ipswLocation.path) {
-        defaultLogger.appendNewLine("Using cached *.ipsw file...")
-        try ipswLocation.updateAccessDate()
-
-        return ipswLocation
-      }
-    }
-
-    // Download the IPSW
-    defaultLogger.appendNewLine("Fetching \(remoteURL.lastPathComponent)...")
-
-    let request = URLRequest(url: remoteURL)
-    let (channel, response) = try await Fetcher.fetch(request, viaFile: true)
-
-    let temporaryLocation = try Config().tartTmpDir.appendingPathComponent(UUID().uuidString + ".ipsw")
-
-    let progress = Progress(totalUnitCount: response.expectedContentLength)
-    ProgressObserver(progress).log(defaultLogger)
-
-    FileManager.default.createFile(atPath: temporaryLocation.path, contents: nil)
-    let lock = try FileLock(lockURL: temporaryLocation)
-    try lock.lock()
-
-    let fileHandle = try FileHandle(forWritingTo: temporaryLocation)
-    let digest = Digest()
-
-    for try await chunk in channel {
-      try fileHandle.write(contentsOf: chunk)
-      digest.update(chunk)
-      progress.completedUnitCount += Int64(chunk.count)
-    }
-
-    try fileHandle.close()
-
-    let finalLocation = try IPSWCache().locationFor(fileName: digest.finalize() + ".ipsw")
-
-    return try FileManager.default.replaceItemAt(finalLocation, withItemAt: temporaryLocation)!
+    try await IPSWDownloader(cacheURL: IPSWCache().baseURL).download(remoteURL)
   }
 
   var inFinalState: Bool {
