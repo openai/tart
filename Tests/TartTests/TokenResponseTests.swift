@@ -2,6 +2,17 @@ import XCTest
 @testable import tart
 
 final class TokenResponseTests: XCTestCase {
+  func testFractionalIssuedAt() throws {
+    for timestamp in ["1970-01-01T00:00:00.125Z", "1970-01-01T01:30:00.125+01:30", "1970-01-01T00:00:00.125000000Z"] {
+      let data = Data("{\"token\":\"test-token\",\"expires_in\":3600,\"issued_at\":\"\(timestamp)\"}".utf8)
+      let response = try TokenResponse.parse(fromData: data)
+
+      XCTAssertEqual(response.issuedAt!.timeIntervalSince1970, 0.125, accuracy: 0.0001)
+      XCTAssertEqual(response.tokenExpiresAt.timeIntervalSince1970, 3600.125, accuracy: 0.0001)
+      XCTAssertFalse(response.isValid())
+    }
+  }
+
   func testBasic() throws {
     var expectedTokenExpiresAtRange = DateInterval()
     let tokenResponseRaw = Data("{\"token\":\"some token\"}".utf8)

@@ -69,12 +69,15 @@ struct TokenResponse: Decodable, Authentication {
     let dateFormatter = ISO8601DateFormatter()
     dateFormatter.formatOptions = [.withInternetDateTime]
     dateFormatter.timeZone = TimeZone(secondsFromGMT: 0)
+    let fractionalDateFormatter = ISO8601DateFormatter()
+    fractionalDateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    fractionalDateFormatter.timeZone = TimeZone(secondsFromGMT: 0)
 
     decoder.dateDecodingStrategy = .custom { decoder in
       let container = try decoder.singleValueContainer()
       let dateString = try container.decode(String.self)
 
-      return dateFormatter.date(from: dateString) ?? Date()
+      return dateFormatter.date(from: dateString) ?? fractionalDateFormatter.date(from: dateString) ?? Date()
     }
 
     var response = try decoder.decode(TokenResponse.self, from: fromData)
