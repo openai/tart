@@ -420,13 +420,17 @@ class Registry {
     // >[...] using the service and scope values from the WWW-Authenticate header.
     //
     // [1]: https://docs.docker.com/registry/spec/auth/token/
-    authenticateURL.queryItems = ["scope", "service"].compactMap { key in
+    let challengeQueryItems: [URLQueryItem] = ["scope", "service"].compactMap { key in
       if let value = wwwAuthenticate.kvs[key] {
         return URLQueryItem(name: key, value: value)
       } else {
         return nil
       }
     }
+
+    authenticateURL.queryItems = (authenticateURL.queryItems ?? []).filter { item in
+      !challengeQueryItems.contains { $0.name == item.name }
+    } + challengeQueryItems
 
     var headers: Dictionary<String, String> = Dictionary()
 
