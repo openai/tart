@@ -226,9 +226,24 @@ struct OCIConfig: Codable {
   var architecture: Architecture = .arm64
   var os: OS = .darwin
   var config: ConfigContainer?
+  // Required by the OCI image spec and enforced by registries that validate
+  // image configs (e.g. Quay). Optional so that configs pushed by older Tart
+  // versions, which lack it, can still be decoded.
+  var rootfs: RootFS? = RootFS()
 
   struct ConfigContainer: Codable {
     var Labels: [String: String]?
+  }
+
+  struct RootFS: Codable {
+    var type: String = "layers"
+    // Tart layers are not filesystem tarballs, so there are no DiffIDs to list
+    var diffIDs: [String] = []
+
+    enum CodingKeys: String, CodingKey {
+      case type
+      case diffIDs = "diff_ids"
+    }
   }
 
   func toJSON() throws -> Data {

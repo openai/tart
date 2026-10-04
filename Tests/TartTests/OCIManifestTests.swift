@@ -154,6 +154,38 @@ final class OCIManifestTests: XCTestCase {
     XCTAssertNil(manifest.diskBlockCount())
   }
 
+  func testOCIConfigIncludesRootFS() throws {
+    let config = OCIConfig(architecture: .arm64, os: .darwin, config: .init(Labels: [diskFormatLabel: "raw"]))
+    let json = try JSONSerialization.jsonObject(with: config.toJSON()) as! [String: Any]
+
+    let rootfs = try XCTUnwrap(json["rootfs"] as? [String: Any])
+    XCTAssertEqual(rootfs["type"] as? String, "layers")
+    XCTAssertEqual(rootfs["diff_ids"] as? [String], [])
+
+    XCTAssertEqual(
+      String(decoding: try config.toJSON(), as: UTF8.self),
+      #"{"architecture":"arm64","config":{"Labels":{"org.cirruslabs.tart.disk.format":"raw"}},"os":"darwin","rootfs":{"diff_ids":[],"type":"layers"}}"#
+    )
+  }
+
+  func testOCIConfigWithoutRootFSDecodes() throws {
+    // OCI config as pushed by Tart 2.40.1 and earlier
+    let json = #"{"architecture":"arm64","config":{"Labels":{"org.cirruslabs.tart.disk.format":"raw"}},"os":"linux"}"#
+    let config = try Config.jsonDecoder().decode(OCIConfig.self, from: Data(json.utf8))
+
+    XCTAssertEqual(config.architecture, .arm64)
+    XCTAssertEqual(config.os, .linux)
+    XCTAssertEqual(config.config?.Labels, [diskFormatLabel: "raw"])
+    XCTAssertNil(config.rootfs)
+  }
+
+  func testOCIConfigRootFSRoundTrips() throws {
+    let config = try Config.jsonDecoder().decode(OCIConfig.self, from: OCIConfig().toJSON())
+
+    XCTAssertEqual(config.rootfs?.type, "layers")
+    XCTAssertEqual(config.rootfs?.diffIDs, [])
+  }
+
   private func assertManifestError(_ expected: OCIManifestValidationError, diskDescriptors: [OCIManifestLayer]) {
     XCTAssertThrowsError(try manifest(diskDescriptors: diskDescriptors).tartDiskRepresentation()) { error in
       XCTAssertEqual(error as? OCIManifestValidationError, expected)
