@@ -41,9 +41,9 @@ struct ARPCacheInternalError: Error, CustomStringConvertible {
 struct ARPCache {
   let arpCommandOutput: Data
 
-  init() throws {
+  init(arpCommandURL: URL = URL(fileURLWithPath: "/usr/sbin/arp")) throws {
     let process = Process.init()
-    process.executableURL = URL.init(fileURLWithPath: "/usr/sbin/arp")
+    process.executableURL = arpCommandURL
     process.arguments = ["-an"]
 
     let pipe = Pipe()
@@ -53,9 +53,7 @@ struct ARPCache {
 
     try process.run()
 
-    guard let arpCommandOutput = try pipe.fileHandleForReading.readToEnd() else {
-      throw ARPCommandYieldedInvalidOutputError(explanation: "empty output")
-    }
+    let arpCommandOutput = try pipe.fileHandleForReading.readToEnd() ?? Data()
 
     process.waitUntilExit()
 
@@ -69,9 +67,12 @@ struct ARPCache {
   }
 
   func ResolveMACAddress(macAddress: MACAddress) throws -> IPv4Address? {
-    let lines = String(decoding: arpCommandOutput, as: UTF8.self)
+    let output = String(decoding: arpCommandOutput, as: UTF8.self)
       .trimmingCharacters(in: .whitespacesAndNewlines)
-      .components(separatedBy: "\n")
+    if output.isEmpty {
+      return nil
+    }
+    let lines = output.components(separatedBy: "\n")
 
     // Based on https://opensource.apple.com/source/network_cmds/network_cmds-606.40.2/arp.tproj/arp.c.auto.html
     let regex = try NSRegularExpression(pattern: #"^.* \((?<ip>.*)\) at (?<mac>.*) on (?<interface>.*) .*$"#)
