@@ -187,6 +187,17 @@ struct Run: AsyncParsableCommand {
   """, valueName: "interface name"))
   var netBridged: [String] = []
 
+  @Option(help: ArgumentHelp("Use a connected datagram Unix domain socket inherited from the parent process for networking (e.g. --net-fd=3)",
+                             discussion: """
+                             The socket carries raw Ethernet frames, one per datagram.
+
+                             The simplest use-case is composing Tart and Softnet invocations that are orchestrated by another program, such as Orchard.
+
+                             Another way to use this argument is to connect a VM to any other networking implementation such as gVisor or software-defined networking implementation.
+                             """,
+                             valueName: "file descriptor"))
+  var netFd: Int32?
+
   @Flag(help: ArgumentHelp("Use software networking provided by Softnet instead of the default shared (NAT) networking",
                            discussion: """
                            Softnet provides better network isolation and alleviates DHCP shortage on production systems. Tart invokes Softnet when this option is specified as a sub-process and communicates with it over socketpair(2).
@@ -332,9 +343,10 @@ struct Run: AsyncParsableCommand {
     if netBridged.count > 0 { netFlags += 1 }
     if netSoftnet { netFlags += 1 }
     if netHost { netFlags += 1 }
+    if netFd != nil { netFlags += 1 }
 
     if netFlags > 1 {
-      throw ValidationError("--net-bridged, --net-softnet and --net-host are mutually exclusive")
+      throw ValidationError("--net-bridged, --net-softnet, --net-host and --net-fd are mutually exclusive")
     }
 
     if graphics && noGraphics {
@@ -723,6 +735,10 @@ struct Run: AsyncParsableCommand {
       }
 
       return NetworkBridged(interfaces: try netBridged.map { try findBridgedInterface($0) })
+    }
+
+    if let netFd = netFd {
+      return try NetworkFD(fd: netFd)
     }
 
     return nil

@@ -24,7 +24,11 @@ class Softnet: Network {
       }
 
       controlFileHandle = FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)
-      try Self.validateControlFD(controlFD)
+      do {
+        try Self.validateControlFD(controlFD)
+      } catch {
+        throw SoftnetError.InitializationFailed(why: "Softnet control file descriptor \(error)")
+      }
     }
 
     let fds = UnsafeMutablePointer<Int32>.allocate(capacity: MemoryLayout<Int>.stride * 2)
@@ -50,20 +54,20 @@ class Softnet: Network {
     }
   }
 
-  static func validateControlFD(_ fd: Int32) throws {
+  static func validateControlFD(_ fd: Int32, type: Int32 = SOCK_STREAM) throws {
     guard fd > STDERR_FILENO else {
-      throw SoftnetError.InitializationFailed(why: "Softnet control file descriptor must be greater than 2")
+      throw RuntimeError.Generic("must be greater than 2")
     }
 
     var socketType: Int32 = 0
     var socketTypeLength = socklen_t(MemoryLayout<Int32>.size)
     guard getsockopt(fd, SOL_SOCKET, SO_TYPE, &socketType, &socketTypeLength) == 0 else {
       let details = Errno(rawValue: CInt(errno))
-      throw SoftnetError.InitializationFailed(why: "Softnet control file descriptor is not a socket: \(details)")
+      throw RuntimeError.Generic("is not a socket: \(details)")
     }
 
-    guard socketType == SOCK_STREAM else {
-      throw SoftnetError.InitializationFailed(why: "Softnet control file descriptor must be a Unix stream socket")
+    guard socketType == type else {
+      throw RuntimeError.Generic("must be a \(type == SOCK_STREAM ? "stream" : "datagram") socket")
     }
 
     var peerAddress = sockaddr_storage()
@@ -75,11 +79,11 @@ class Softnet: Network {
     }
     guard result == 0 else {
       let details = Errno(rawValue: CInt(errno))
-      throw SoftnetError.InitializationFailed(why: "Softnet control file descriptor is not connected: \(details)")
+      throw RuntimeError.Generic("is not connected: \(details)")
     }
 
     guard peerAddress.ss_family == sa_family_t(AF_UNIX) else {
-      throw SoftnetError.InitializationFailed(why: "Softnet control file descriptor must be a Unix stream socket")
+      throw RuntimeError.Generic("must be a Unix socket")
     }
   }
 
