@@ -55,10 +55,6 @@ class Softnet: Network {
   }
 
   static func validateControlFD(_ fd: Int32, type: Int32 = SOCK_STREAM) throws {
-    guard fd > STDERR_FILENO else {
-      throw RuntimeError.Generic("must be greater than 2")
-    }
-
     var socketType: Int32 = 0
     var socketTypeLength = socklen_t(MemoryLayout<Int32>.size)
     guard getsockopt(fd, SOL_SOCKET, SO_TYPE, &socketType, &socketTypeLength) == 0 else {
