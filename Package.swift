@@ -30,7 +30,14 @@ let package = Package(
 
   ],
   targets: [
+    .target(
+      name: "TartCoreFoundationShim",
+      path: "Sources/TartCoreFoundationShim",
+      publicHeadersPath: "include",
+      linkerSettings: [.linkedFramework("CoreFoundation")]
+    ),
     .executableTarget(name: "tart", dependencies: [
+      "TartCoreFoundationShim",
       .product(name: "Algorithms", package: "swift-algorithms"),
       .product(name: "ArgumentParser", package: "swift-argument-parser"),
       .product(name: "Dynamic", package: "Dynamic"),
