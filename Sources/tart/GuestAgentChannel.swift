@@ -14,8 +14,11 @@ func withGuestAgentChannel<T>(
   let channel = try GRPCChannelPool.with(
     target: .unixDomainSocket(socketPath),
     transportSecurity: .plaintext,
-    eventLoopGroup: .singletonMultiThreadedEventLoopGroup,
-  )
+    eventLoopGroup: .singletonMultiThreadedEventLoopGroup
+  ) { configuration in
+    // Limit guest output in flight to work around VirtIO socket device implementation data loss
+    configuration.http2.targetWindowSize = 64 * 1024
+  }
 
   do {
     let result = try await body(channel)
