@@ -57,3 +57,5 @@ tart run tahoe-base
 
 Please check the [official documentation](https://tart.run) for more information and/or feel free to use [discussions](https://github.com/openai/tart/discussions)
 for remaining questions.
+
+Remote `tart create --from-ipsw <URL>` downloads retry transient network failures. Tart keeps partial downloads in its IPSW cache and resumes them when the server provides a matching validator and supports byte ranges. Partial downloads older than seven days are removed when another remote IPSW download starts.
