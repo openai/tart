@@ -264,6 +264,17 @@ struct Run: AsyncParsableCommand {
   @Flag(help: ArgumentHelp("Restrict network access to the host-only network"))
   var netHost: Bool = false
 
+  @Option(help: ArgumentHelp(
+    "Attach the root disk from an NBD URL instead of the local disk image (e.g. --root-disk=\"nbd+unix:///myDisk?socket=/tmp/disk.sock\")",
+    discussion: """
+    The disk attachment is a Network Block Device URL. Supported schemes are nbd, nbds, nbd+unix and nbds+unix.
+
+    The URL is passed through to Virtualization.framework. Tart does not open the VM disk image when this option is set.
+
+    --root-disk-opts=ro attaches the disk read-only. sync=none and sync=full select the NBD synchronization mode (the default is full). sync=fsync and any caching= option are rejected: the NBD attachment has no caching mode.
+    """))
+  var rootDisk: String = ""
+
   @Option(help: ArgumentHelp("Set the root disk options (e.g. --root-disk-opts=\"ro\" or --root-disk-opts=\"caching=cached,sync=none\")",
                              discussion: """
                              Options are comma-separated and are as follows:
@@ -464,6 +475,7 @@ struct Run: AsyncParsableCommand {
 
     // Parse root disk options
     let diskOptions = DiskOptions(rootDiskOpts)
+    let rootNBD = try rootDiskNBD(diskOptions)
 
     // Parse guest provisioning options
     #if arch(arm64) && compiler(>=6.4)
@@ -490,7 +502,10 @@ struct Run: AsyncParsableCommand {
       caching: VZDiskImageCachingMode(diskOptions.cachingModeRaw),
       noTrackpad: noTrackpad,
       noPointer: noPointer,
-      noKeyboard: noKeyboard
+      noKeyboard: noKeyboard,
+      rootDiskNBDURL: rootNBD,
+      rootDiskReadOnly: diskOptions.readOnly,
+      nbdSyncModeRaw: diskOptions.syncModeRaw
     )
 
     let vncImpl: VNC? = try {
@@ -835,6 +850,33 @@ struct Run: AsyncParsableCommand {
     MainApp.suspendable = suspendable
     MainApp.capturesSystemKeys = captureSystemKeys
     MainApp.main()
+  }
+
+  private func rootDiskNBD(_ diskOptions: DiskOptions) throws -> URL? {
+    let raw = rootDisk.trimmingCharacters(in: .whitespacesAndNewlines)
+    if raw.isEmpty {
+      return nil
+    }
+
+    guard #available(macOS 14, *) else {
+      throw UnsupportedOSError("attaching Network Block Devices", "are", "running macOS 14.0 (Sonoma) or newer")
+    }
+
+    guard let url = URL(string: raw),
+          let scheme = url.scheme?.lowercased(),
+          ["nbd", "nbds", "nbd+unix", "nbds+unix"].contains(scheme) else {
+      throw RuntimeError.VMConfigurationError(
+        "root disk must be an NBD URL with scheme nbd, nbds, nbd+unix or nbds+unix"
+      )
+    }
+
+    if !diskOptions.cachingModeRaw.isEmpty {
+      throw RuntimeError.VMConfigurationError("caching mode is not supported for an NBD root disk")
+    }
+
+    // Reject image-only modes such as sync=fsync before the VM is configured.
+    _ = try VZDiskSynchronizationMode(diskOptions.syncModeRaw)
+    return url
   }
 }
 

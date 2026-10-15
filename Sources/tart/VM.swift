@@ -54,7 +54,10 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
        caching: VZDiskImageCachingMode? = nil,
        noTrackpad: Bool = false,
        noPointer: Bool = false,
-       noKeyboard: Bool = false
+       noKeyboard: Bool = false,
+       rootDiskNBDURL: URL? = nil,
+       rootDiskReadOnly: Bool = false,
+       nbdSyncModeRaw: String = ""
   ) throws {
     name = vmDir.name
     config = try VMConfig.init(fromURL: vmDir.configURL)
@@ -79,7 +82,10 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
                                                 caching: caching,
                                                 noTrackpad: noTrackpad,
                                                 noPointer: noPointer,
-                                                noKeyboard: noKeyboard
+                                                noKeyboard: noKeyboard,
+                                                rootDiskNBDURL: rootDiskNBDURL,
+                                                rootDiskReadOnly: rootDiskReadOnly,
+                                                nbdSyncModeRaw: nbdSyncModeRaw
     )
     virtualMachine = VZVirtualMachine(configuration: configuration)
 
@@ -331,7 +337,10 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
     caching: VZDiskImageCachingMode? = nil,
     noTrackpad: Bool = false,
     noPointer: Bool = false,
-    noKeyboard: Bool = false
+    noKeyboard: Bool = false,
+    rootDiskNBDURL: URL? = nil,
+    rootDiskReadOnly: Bool = false,
+    nbdSyncModeRaw: String = ""
   ) throws -> VZVirtualMachineConfiguration {
     let configuration = VZVirtualMachineConfiguration()
 
@@ -403,7 +412,18 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
     // [1]: https://github.com/cirruslabs/tart/pull/675
     let cachingMode = caching ?? (vmConfig.os == .linux ? .cached : .automatic)
     let attachment: VZStorageDeviceAttachment
-    if vmDir.isStackedVM {
+    if let rootDiskNBDURL {
+      guard #available(macOS 14, *) else {
+        throw UnsupportedOSError("attaching Network Block Devices", "are", "running macOS 14.0 (Sonoma) or newer")
+      }
+      // The local disk image stays closed. The NBD server owns the file.
+      attachment = try VZNetworkBlockDeviceStorageDeviceAttachment(
+        url: rootDiskNBDURL,
+        timeout: 30,
+        isForcedReadOnly: rootDiskReadOnly,
+        synchronizationMode: try VZDiskSynchronizationMode(nbdSyncModeRaw)
+      )
+    } else if vmDir.isStackedVM {
       attachment = try vmDir.diskImageStack().makeAttachment(
         readOnly: false,
         cachingMode: cachingMode,
