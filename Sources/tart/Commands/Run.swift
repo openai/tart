@@ -264,6 +264,13 @@ struct Run: AsyncParsableCommand {
   @Flag(help: ArgumentHelp("Restrict network access to the host-only network"))
   var netHost: Bool = false
 
+  @Option(help: ArgumentHelp("Expose a guest vsock port as a Unix socket in the VM's directory (e.g. --vsock-socket 4000)", discussion: """
+  Each connection to vsock-<port>.sock in the VM's directory is forwarded to that port in the guest over virtio-vsock, the way the control socket reaches the Tart Guest Agent. The guest sees the connection come from the host (CID 2).
+
+  The socket is created with mode 0600, so only the user running "tart run" and root can connect. May be repeated for several ports. Requires macOS 14 or newer.
+  """, valueName: "port"))
+  var vsockSocket: [UInt32] = []
+
   @Option(help: ArgumentHelp("Set the root disk options (e.g. --root-disk-opts=\"ro\" or --root-disk-opts=\"caching=cached,sync=none\")",
                              discussion: """
                              Options are comma-separated and are as follows:
@@ -333,6 +340,21 @@ struct Run: AsyncParsableCommand {
   mutating func validate() throws {
     if vnc && vncExperimental {
       throw ValidationError("--vnc and --vnc-experimental are mutually exclusive")
+    }
+
+    for port in vsockSocket {
+      if port == 0 || port == UInt32.max {
+        throw ValidationError("--vsock-socket: \(port) is not a usable vsock port")
+      }
+      if port == 8080 {
+        throw ValidationError("--vsock-socket: port 8080 is the Tart Guest Agent's, already served by the control socket")
+      }
+    }
+    if Swift.Set(vsockSocket).count != vsockSocket.count {
+      throw ValidationError("--vsock-socket: each port may be given only once")
+    }
+    if !vsockSocket.isEmpty, #unavailable(macOS 14) {
+      throw ValidationError("--vsock-socket requires macOS 14 or newer")
     }
 
     // Automatically enable --net-softnet when any of its related options are specified
@@ -614,6 +636,14 @@ struct Run: AsyncParsableCommand {
 
           ErrorReportingTask("Failed to run control socket") {
             try await controlSocket.run()
+          }
+
+          for port in vsockSocket {
+            let vsockSocket = try await ControlSocket(vmDir.vsockSocketURL(port: port), vmPort: port, permissions: 0o600)
+
+            ErrorReportingTask("Failed to run vsock socket for port \(port)") {
+              try await vsockSocket.run()
+            }
           }
         }
 
