@@ -273,7 +273,7 @@ class VMStorageOCI: PrunableStorage {
 
   /// Remove immutable files whose final published or in-progress reference
   /// has disappeared, without collecting unrelated cached images.
-  fileprivate func gcContent() throws {
+  func gcContent() throws {
     let contentStore = try ContentStore()
     try contentStore.withPruneLock {
       let referencedContentDigests = try referencedContentDigests(includeCachedImages: true)
@@ -281,6 +281,35 @@ class VMStorageOCI: PrunableStorage {
         try FileManager.default.removeItem(at: contentURL)
       }
     }
+  }
+
+  private func resolvedPath(_ url: URL) -> String {
+    url.standardizedFileURL.resolvingSymlinksInPath().standardizedFileURL.path
+  }
+
+  /// Tags and digests share a namespace directory. Look only at its direct
+  /// entries, without traversing other namespaces or cached image contents.
+  fileprivate func tagSymlinks(pointingTo targetURL: URL) throws -> [URL] {
+    let targetPath = resolvedPath(targetURL)
+    guard let enumerator = FileManager.default.enumerator(
+      at: targetURL.deletingLastPathComponent(),
+      includingPropertiesForKeys: [.isSymbolicLinkKey],
+      options: [.skipsSubdirectoryDescendants]
+    ) else {
+      return []
+    }
+
+    var result = [URL]()
+    for case let foundURL as URL in enumerator {
+      let values = try foundURL.resourceValues(forKeys: [.isSymbolicLinkKey])
+      guard values.isSymbolicLink == true, resolvedPath(foundURL) == targetPath else {
+        continue
+      }
+
+      result.append(foundURL)
+    }
+
+    return result
   }
 
   func list() throws -> [(String, VMDirectory, Bool)] {
@@ -298,10 +327,6 @@ class VMStorageOCI: PrunableStorage {
         continue
       }
 
-      // Split the relative VM's path at the last component
-      // and figure out which character should be used
-      // to join them together, either ":" for tags or
-      // "@" for hashes
       let parts = [foundURL.deletingLastPathComponent().relativePath, foundURL.lastPathComponent]
       var name: String
 
@@ -314,7 +339,6 @@ class VMStorageOCI: PrunableStorage {
 
       // Remove the percent-encoding, if any
       name = percentDecode(name)
-
       result.append((name, vmDir, isSymlink))
     }
 
@@ -829,10 +853,15 @@ private struct CachedImagePrunable: Prunable {
   }
 
   func delete() throws {
-    try vmDir.delete()
-    // Deleting a record can make attributed content unreferenced. Run GC now
-    // so one prune invocation reclaims those bytes.
-    try VMStorageOCI().gcContent()
+    let storage = try VMStorageOCI()
+    let contentStore = try ContentStore()
+    try contentStore.withPruneLock {
+      let tagSymlinks = try storage.tagSymlinks(pointingTo: vmDir.url)
+      try vmDir.deleteHoldingPruneLock()
+      for tagSymlink in tagSymlinks {
+        try FileManager.default.removeItem(at: tagSymlink)
+      }
+    }
   }
 
   func accessDate() throws -> Date {

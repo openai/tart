@@ -76,11 +76,32 @@ struct Prune: AsyncParsableCommand {
 
   static func pruneOlderThan(prunableStorages: [PrunableStorage], olderThanDate: Date) throws {
     let prunables: [Prunable] = try prunableStorages.flatMap { try $0.prunables() }
+    let ociStorage = firstOCIStorage(in: prunableStorages)
+    var didPruneCachedImage = false
 
-    try prunables.filter { try $0.accessDate() <= olderThanDate }.forEach { try $0.delete() }
+    do {
+      for prunable in prunables {
+        guard try prunable.accessDate() <= olderThanDate else {
+          continue
+        }
+
+        let didDeleteCachedImage = ociStorage.map { isCachedImage(prunable, in: $0) } ?? false
+        try prunable.delete()
+        didPruneCachedImage = didPruneCachedImage || didDeleteCachedImage
+      }
+    } catch {
+      // Reclaim content released before the failure, preserving the original
+      // pruning error even if this cleanup also fails.
+      try? collectOCIContentIfNeeded(using: ociStorage, afterDeletingCachedImage: didPruneCachedImage)
+      throw error
+    }
+
+    try collectOCIContentIfNeeded(using: ociStorage, afterDeletingCachedImage: didPruneCachedImage)
   }
 
   static func pruneSpaceBudget(prunableStorages: [PrunableStorage], spaceBudgetBytes: UInt64) throws {
+    let ociStorage = firstOCIStorage(in: prunableStorages)
+
     while true {
       let prunables: [Prunable] = try prunableStorages
         .flatMap { try $0.prunables() }
@@ -102,13 +123,35 @@ struct Prune: AsyncParsableCommand {
       }
 
       guard let prunableToDelete else {
-        return
+        break
       }
 
       // Deleting one cached stacked image can change which remaining image
       // owns shared immutable content. Rebuild before choosing another.
+      let didPruneCachedImage = ociStorage.map { isCachedImage(prunableToDelete, in: $0) } ?? false
       try prunableToDelete.delete()
+      try collectOCIContentIfNeeded(using: ociStorage, afterDeletingCachedImage: didPruneCachedImage)
     }
+  }
+
+  private static func firstOCIStorage(in prunableStorages: [PrunableStorage]) -> VMStorageOCI? {
+    prunableStorages.compactMap { $0 as? VMStorageOCI }.first
+  }
+
+  private static func isCachedImage(_ prunable: Prunable, in storage: VMStorageOCI) -> Bool {
+    prunable.url.standardizedFileURL.pathComponents.starts(with: storage.baseURL.standardizedFileURL.pathComponents) &&
+      VMDirectory(baseURL: prunable.url).isCachedImage
+  }
+
+  private static func collectOCIContentIfNeeded(
+    using storage: VMStorageOCI?,
+    afterDeletingCachedImage didDelete: Bool
+  ) throws {
+    guard didDelete, let storage else {
+      return
+    }
+
+    try storage.gcContent()
   }
 
   static func reclaimIfNeeded(_ requiredBytes: UInt64, _ initiator: Prunable? = nil) throws {
@@ -156,7 +199,8 @@ struct Prune: AsyncParsableCommand {
     let span = OTel.shared.tracer.spanBuilder(spanName: "prune").startSpan()
     defer { span.end() }
 
-    let prunableStorages: [PrunableStorage] = [try VMStorageOCI(), try IPSWCache()]
+    let ociStorage = try VMStorageOCI()
+    let prunableStorages: [PrunableStorage] = [ociStorage, try IPSWCache()]
     let prunables = {
       try prunableStorages
         .flatMap { try $0.prunables() }
@@ -192,7 +236,9 @@ struct Prune: AsyncParsableCommand {
       OpenTelemetry.instance.contextProvider.activeSpan?
         .addEvent(name: "Pruned \(allocatedSizeBytes) bytes for \(prunable.url.path)")
 
+      let didPruneCachedImage = isCachedImage(prunable, in: ociStorage)
       try prunable.delete()
+      try collectOCIContentIfNeeded(using: ociStorage, afterDeletingCachedImage: didPruneCachedImage)
       currentCacheUsedBytes = try prunables().map { try $0.allocatedSizeBytes() }.reduce(0, +)
     }
 
