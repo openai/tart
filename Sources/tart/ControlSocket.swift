@@ -17,7 +17,7 @@ class ControlSocket {
   let serverChannel: ServerChannel
   let logger: os.Logger = os.Logger(subsystem: "org.cirruslabs.tart.control-socket", category: "network")
 
-  init(_ controlSocketURL: URL, vmPort: UInt32 = 8080) async throws {
+  init(_ controlSocketURL: URL, vmPort: UInt32 = 8080, permissions: mode_t? = nil) async throws {
     self.controlSocketURL = controlSocketURL
     self.vmPort = vmPort
     let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
@@ -51,6 +51,15 @@ class ControlSocket {
           }
         }
     } catch {
+      try? await eventLoopGroup.shutdownGracefully()
+      throw error
+    }
+
+    // Restrict who can connect before run() starts accepting connections
+    if let permissions = permissions,
+       chmod(controlSocketURL.path(percentEncoded: false), permissions) != 0 {
+      let error = Errno(rawValue: errno)
+      try? await serverChannel.channel.close()
       try? await eventLoopGroup.shutdownGracefully()
       throw error
     }

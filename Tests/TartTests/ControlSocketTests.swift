@@ -31,6 +31,25 @@ final class ControlSocketTests: XCTestCase {
     try await eventLoopGroup.shutdownGracefully()
   }
 
+  func testInitializerAppliesRequestedPermissions() async throws {
+    let temporaryDirectory = try makeTemporaryDirectory()
+    let originalDirectory = FileManager.default.currentDirectoryPath
+    defer {
+      FileManager.default.changeCurrentDirectoryPath(originalDirectory)
+      try? FileManager.default.removeItem(at: temporaryDirectory)
+    }
+
+    let socketURL = URL(fileURLWithPath: "vsock-4000.sock", relativeTo: temporaryDirectory)
+    let controlSocket = try await ControlSocket(socketURL, vmPort: 4000, permissions: 0o600)
+
+    let attributes = try FileManager.default.attributesOfItem(atPath: socketURL.path)
+    XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    XCTAssertEqual(controlSocket.vmPort, 4000)
+
+    try await controlSocket.serverChannel.executeThenClose { _ in }
+    try await controlSocket.eventLoopGroup.shutdownGracefully()
+  }
+
   func testAcceptErrorsRetryReadingAndForwardOtherErrors() async throws {
     let temporaryDirectory = try makeTemporaryDirectory()
     let originalDirectory = FileManager.default.currentDirectoryPath
