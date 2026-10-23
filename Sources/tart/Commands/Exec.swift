@@ -82,10 +82,8 @@ struct Exec: AsyncParsableCommand {
         $0.args = Array(command.dropFirst(1))
         $0.interactive = interactive
         $0.tty = tty
-        if tty {
+        if tty, let (width, height) = try? Term.GetSize() {
           $0.terminalSize = .with {
-            let (width, height) = try! Term.GetSize()
-
             $0.cols = UInt32(width)
             $0.rows = UInt32(height)
           }
@@ -168,7 +166,9 @@ struct Exec: AsyncParsableCommand {
       if tty {
         let terminalDimensionsStream = AsyncStream { continuation in
           sigwinchSrc.setEventHandler {
-            continuation.yield(try! Term.GetSize())
+            if let size = try? Term.GetSize() {
+              continuation.yield(size)
+            }
           }
         }
 
