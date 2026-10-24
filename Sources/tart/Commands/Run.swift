@@ -1384,7 +1384,7 @@ struct DirectoryShare {
 
 extension String {
   func toRemoteOrLocalURL() -> URL {
-    if (starts(with: "https://") || starts(with: "https://")) {
+    if (starts(with: "http://") || starts(with: "https://")) {
       URL(string: self)!
     } else {
       URL(fileURLWithPath: NSString(string: self).expandingTildeInPath)

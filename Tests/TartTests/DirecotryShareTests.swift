@@ -70,5 +70,9 @@ final class DirectoryShareTests: XCTestCase {
     XCTAssertEqual(archiveWithNameAndOptions.path, URL(string: "https://example.com/archive.tar.gz")!)
     XCTAssertTrue(archiveWithNameAndOptions.readOnly)
     XCTAssertEqual(archiveWithNameAndOptions.mountTag, "sometag")
+
+    let httpArchiveWithName = try DirectoryShare(parseFrom: "somename:http://example.com/archive.tar.gz")
+    XCTAssertEqual(httpArchiveWithName.name, "somename")
+    XCTAssertEqual(httpArchiveWithName.path, URL(string: "http://example.com/archive.tar.gz")!)
   }
 }
