@@ -149,6 +149,15 @@ final class CommandBehaviorTests: XCTestCase {
     XCTAssertNoThrow(try Create.parse(["vm", "--linux"]))
   }
 
+  func testSetRejectsInvalidArguments() {
+    XCTAssertThrowsError(try Set.parse(["org/vm", "--cpu", "4"]))
+    XCTAssertThrowsError(try Set.parse(["vm", "--cpu", "0"]))
+    XCTAssertThrowsError(try Set.parse(["vm", "--memory", "0"]))
+    XCTAssertThrowsError(try Set.parse(["vm", "--disk-size", "0"]))
+    XCTAssertThrowsError(try Set.parse(["vm", "--random-mac", "--mac", "00:11:22:33:44:55"]))
+    XCTAssertNoThrow(try Set.parse(["vm", "--cpu", "4"]))
+  }
+
   func testStandaloneDeleteDoesNotInitializeContentStore() throws {
     try withTemporaryTartHome {
       let vmDir = try VMStorageLocal().create("standalone")
