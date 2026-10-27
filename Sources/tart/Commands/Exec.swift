@@ -9,9 +9,30 @@ struct ExecCustomExitCodeError: Error {
 
 struct Exec: AsyncParsableCommand {
   static var configuration = CommandConfiguration(abstract: "Execute a command in a running VM", discussion: """
-  Requires Tart Guest Agent running in a guest VM.
+  Runs a command inside a running VM without SSH or guest networking.
 
-  Note that all non-vanilla Cirrus Labs VM images already have the Tart Guest Agent installed.
+  Requires macOS 14 or newer and Tart Guest Agent running inside the guest VM.
+  All non-vanilla Cirrus Labs VM images already include Tart Guest Agent.
+
+  Commands run directly as the guest user running Tart Guest Agent. Use a shell
+  explicitly for shell features such as pipes, redirection, or environment
+  variable expansion. Tart exits with the guest command's exit code.
+
+  Examples:
+    Run a command:
+      tart exec tahoe-base /usr/bin/uname -a
+
+    Run a shell command:
+      tart exec tahoe-base /bin/sh -c 'pwd; printenv HOME'
+
+    Open an interactive shell:
+      tart exec -i -t tahoe-base /bin/zsh
+
+    Run a local script inside the guest VM:
+      tart exec -i tahoe-base /bin/sh < script.sh
+
+  See https://github.com/openai/tart-guest-agent for guest agent installation
+  and execution privileges.
   """)
 
   @Flag(name: [.customShort("i")], help: "Attach host's standard input to a remote command")
