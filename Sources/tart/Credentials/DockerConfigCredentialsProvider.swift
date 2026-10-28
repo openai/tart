@@ -20,7 +20,7 @@ class DockerConfigCredentialsProvider: CredentialsProvider {
     return nil
   }
 
-  private func executeHelper(binaryName: String, host: String) throws -> (String, String)? {
+  func executeHelper(binaryName: String, host: String) throws -> (String, String)? {
     guard let executableURL = resolveBinaryPath(binaryName) else {
       throw CredentialsProviderError.Failed(message: "\(binaryName) not found in PATH")
     }
@@ -33,7 +33,6 @@ class DockerConfigCredentialsProvider: CredentialsProvider {
     let inPipe = Pipe()
 
     process.standardOutput = outPipe
-    process.standardError = outPipe
     process.standardInput = inPipe
 
     process.launch()
