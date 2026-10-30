@@ -96,7 +96,7 @@ class ControlSocket {
         }
 
         try await vmChannel.executeThenClose { (vmInbound, vmOutbound) in
-          try await withThrowingDiscardingTaskGroup { group in
+          try await withThrowingTaskGroup(of: Void.self) { group in
             // Proxy data from a client (e.g. "tart exec") to a VM
             group.addTask {
               for try await message in clientInbound {
@@ -110,6 +110,26 @@ class ControlSocket {
                 try await clientOutbound.write(message)
               }
             }
+
+            // Whichever direction ends first ends the proxy.
+            //
+            // A discarding task group waits for BOTH children, and a child
+            // whose inbound sequence merely ENDS returns normally instead of
+            // throwing -- so one side's half-close never cancelled the other.
+            // A guest that closed its connection left the VM->client child
+            // finished and the client->VM child parked forever on a client
+            // that was itself waiting for that very close to arrive. Neither
+            // moved, and `executeThenClose` cannot close the client connection
+            // until this group returns, so a guest-initiated close was never
+            // observable by the client: it saw the connection stay open until
+            // it gave up on its own.
+            //
+            // Taking the first child to finish and cancelling the rest loses
+            // no data in either direction: a child finishes only once its
+            // inbound sequence is exhausted, so everything that side sent has
+            // already been written to the other.
+            _ = try await group.next()
+            group.cancelAll()
           }
         }
 
