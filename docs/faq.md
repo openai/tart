@@ -263,7 +263,7 @@ tart run --root-disk="nbd+unix:///vm-disk?socket=/tmp/vm-disk.sock" <VM>
 
 Supported schemes are `nbd`, `nbds`, `nbd+unix` and `nbds+unix`. Tart does not open the VM's local disk image in this mode, so the NBD server is responsible for the disk contents.
 
-`--root-disk-opts` accepts `ro`, `sync=none` and `sync=full` with `--root-disk`. `sync=fsync` and `caching=` options only apply to local disk images and are rejected.
+`--root-disk-opts` only accepts `ro`, `sync=none` and `sync=full` with `--root-disk`. Any other option is rejected, including `sync=fsync` and `caching=`, which only apply to local disk images.
 
 A saved machine state is tied to the disk it was suspended with, so `--root-disk` cannot be combined with `--suspendable` or used to resume a suspended VM.
 

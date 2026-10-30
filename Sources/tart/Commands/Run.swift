@@ -271,7 +271,7 @@ struct Run: AsyncParsableCommand {
 
     The URL is passed through to Virtualization.framework. Tart does not open the VM disk image when this option is set.
 
-    --root-disk-opts=ro attaches the disk read-only. sync=none and sync=full select the NBD synchronization mode (the default is full). sync=fsync and any caching= option are rejected: the NBD attachment has no caching mode.
+    --root-disk-opts=ro attaches the disk read-only. sync=none and sync=full select the NBD synchronization mode (the default is full). Any other option, including sync=fsync and caching=, is rejected: the NBD attachment has no caching mode.
 
     Requires a host running macOS 14 (Sonoma) or newer. Cannot be used with --suspendable or to resume a suspended VM.
     """, valueName: "URL"))
@@ -386,7 +386,7 @@ struct Run: AsyncParsableCommand {
       suspendable = true
     }
 
-    _ = try Self.rootDiskNBDURL(rootDisk, DiskOptions(rootDiskOpts))
+    _ = try Self.rootDiskNBDURL(rootDisk, rootDiskOpts)
 
     if suspendable {
       // A saved machine state is tied to the disk it was suspended with.
@@ -453,7 +453,7 @@ struct Run: AsyncParsableCommand {
     // Resolve an NBD root before the local format check. The NBD attachment
     // never opens the local image, so an unsupported local format is irrelevant.
     let diskOptions = DiskOptions(rootDiskOpts)
-    let rootNBD = try Self.rootDiskNBDURL(rootDisk, diskOptions)
+    let rootNBD = try Self.rootDiskNBDURL(rootDisk, rootDiskOpts)
 
     let vmConfig = try VMConfig(fromURL: vmDir.configURL)
     if rootNBD == nil && !vmConfig.diskFormat.isSupported {
@@ -885,7 +885,7 @@ struct Run: AsyncParsableCommand {
     MainApp.main()
   }
 
-  static func rootDiskNBDURL(_ rootDisk: String?, _ diskOptions: DiskOptions) throws -> URL? {
+  static func rootDiskNBDURL(_ rootDisk: String?, _ rootDiskOpts: String) throws -> URL? {
     guard let rootDisk else {
       return nil
     }
@@ -900,16 +900,13 @@ struct Run: AsyncParsableCommand {
       throw ValidationError("--root-disk must be an NBD URL with scheme nbd, nbds, nbd+unix or nbds+unix")
     }
 
-    if !diskOptions.cachingModeRaw.isEmpty {
-      throw ValidationError("--root-disk-opts caching= is not supported with --root-disk")
+    // DiskOptions silently skips unknown tokens, which would attach the
+    // export read-write after a typo such as "readonly".
+    for option in rootDiskOpts.split(separator: ",") where !["ro", "sync=none", "sync=full"].contains(option) {
+      throw ValidationError("--root-disk-opts \"\(option)\" is not supported with --root-disk, use ro, sync=none or sync=full")
     }
 
-    switch diskOptions.syncModeRaw {
-    case "", "none", "full":
-      return url
-    default:
-      throw ValidationError("--root-disk-opts sync=\(diskOptions.syncModeRaw) is not supported with --root-disk, use sync=none or sync=full")
-    }
+    return url
   }
 }
 
