@@ -264,6 +264,19 @@ struct Run: AsyncParsableCommand {
   @Flag(help: ArgumentHelp("Restrict network access to the host-only network"))
   var netHost: Bool = false
 
+  @Option(help: ArgumentHelp(
+    "Attach the root disk from an NBD URL instead of the local disk image (e.g. --root-disk=\"nbd+unix:///myDisk?socket=/tmp/disk.sock\")",
+    discussion: """
+    The disk attachment is a Network Block Device URL. Supported schemes are nbd, nbds, nbd+unix and nbds+unix.
+
+    The URL is passed through to Virtualization.framework. Tart does not open the VM disk image when this option is set.
+
+    --root-disk-opts=ro attaches the disk read-only. sync=none and sync=full select the NBD synchronization mode (the default is full). sync=fsync and any caching= option are rejected: the NBD attachment has no caching mode.
+
+    Requires a host running macOS 14 (Sonoma) or newer. Cannot be used with --suspendable or to resume a suspended VM.
+    """, valueName: "URL"))
+  var rootDisk: String?
+
   @Option(help: ArgumentHelp("Set the root disk options (e.g. --root-disk-opts=\"ro\" or --root-disk-opts=\"caching=cached,sync=none\")",
                              discussion: """
                              Options are comma-separated and are as follows:
@@ -373,7 +386,14 @@ struct Run: AsyncParsableCommand {
       suspendable = true
     }
 
+    _ = try Self.rootDiskNBDURL(rootDisk, DiskOptions(rootDiskOpts))
+
     if suspendable {
+      // A saved machine state is tied to the disk it was suspended with.
+      if rootDisk != nil {
+        throw ValidationError("--root-disk cannot be used with --suspendable or to resume a suspended VM")
+      }
+
       let config = try VMConfig.init(fromURL: vmDir.configURL)
       if !(config.platform is PlatformSuspendable) {
         throw ValidationError("This platform is not suspendable")
@@ -430,9 +450,13 @@ struct Run: AsyncParsableCommand {
     let storageLock = try FileLock(lockURL: Config().tartHomeDir)
     try storageLock.lock()
 
-    // Validate disk format support
+    // Resolve an NBD root before the local format check. The NBD attachment
+    // never opens the local image, so an unsupported local format is irrelevant.
+    let diskOptions = DiskOptions(rootDiskOpts)
+    let rootNBD = try Self.rootDiskNBDURL(rootDisk, diskOptions)
+
     let vmConfig = try VMConfig(fromURL: vmDir.configURL)
-    if !vmConfig.diskFormat.isSupported {
+    if rootNBD == nil && !vmConfig.diskFormat.isSupported {
       throw ValidationError("Disk format '\(vmConfig.diskFormat.rawValue)' is not supported on this system.")
     }
 
@@ -486,9 +510,6 @@ struct Run: AsyncParsableCommand {
       serialPorts.append(createSerialPortConfiguration(tty_read!, tty_write!))
     }
 
-    // Parse root disk options
-    let diskOptions = DiskOptions(rootDiskOpts)
-
     // Parse guest provisioning options
     #if arch(arm64) && compiler(>=6.4)
       let provisioning = try provisioningOpts.map { try GuestProvisioningOptions($0) }
@@ -514,7 +535,10 @@ struct Run: AsyncParsableCommand {
       caching: VZDiskImageCachingMode(diskOptions.cachingModeRaw),
       noTrackpad: noTrackpad,
       noPointer: noPointer,
-      noKeyboard: noKeyboard
+      noKeyboard: noKeyboard,
+      rootDiskNBDURL: rootNBD,
+      rootDiskReadOnly: diskOptions.readOnly,
+      nbdSyncModeRaw: diskOptions.syncModeRaw
     )
 
     let vncImpl: VNC? = try {
@@ -859,6 +883,33 @@ struct Run: AsyncParsableCommand {
     MainApp.suspendable = suspendable
     MainApp.capturesSystemKeys = captureSystemKeys
     MainApp.main()
+  }
+
+  static func rootDiskNBDURL(_ rootDisk: String?, _ diskOptions: DiskOptions) throws -> URL? {
+    guard let rootDisk else {
+      return nil
+    }
+
+    guard #available(macOS 14, *) else {
+      throw ValidationError("--root-disk requires a host running macOS 14 (Sonoma) or newer")
+    }
+
+    guard let url = URL(string: rootDisk.trimmingCharacters(in: .whitespacesAndNewlines)),
+          let scheme = url.scheme?.lowercased(),
+          ["nbd", "nbds", "nbd+unix", "nbds+unix"].contains(scheme) else {
+      throw ValidationError("--root-disk must be an NBD URL with scheme nbd, nbds, nbd+unix or nbds+unix")
+    }
+
+    if !diskOptions.cachingModeRaw.isEmpty {
+      throw ValidationError("--root-disk-opts caching= is not supported with --root-disk")
+    }
+
+    switch diskOptions.syncModeRaw {
+    case "", "none", "full":
+      return url
+    default:
+      throw ValidationError("--root-disk-opts sync=\(diskOptions.syncModeRaw) is not supported with --root-disk, use sync=none or sync=full")
+    }
   }
 }
 
