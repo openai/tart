@@ -142,9 +142,10 @@ class Registry {
     credentialsProviders: [CredentialsProvider] = [EnvironmentCredentialsProvider(), DockerConfigCredentialsProvider(), KeychainCredentialsProvider()]
   ) throws {
     let proto = insecure ? "http" : "https"
-    var baseURLComponents = URLComponents(string: proto + "://" + host + "/v2/")!
-
-    guard var baseURL = baseURLComponents.url else {
+    // "https://ghcr.io" would still parse, as a URL with "https" as its host
+    guard !host.hasPrefix("http://") && !host.hasPrefix("https://"),
+          var baseURLComponents = URLComponents(string: proto + "://" + host + "/v2/"),
+          var baseURL = baseURLComponents.url else {
       var hint = ""
 
       if host.hasPrefix("http://") || host.hasPrefix("https://") {

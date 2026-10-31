@@ -65,6 +65,18 @@ final class RegistryHostTests: XCTestCase {
     XCTAssertEqual(password, "password")
     XCTAssertEqual(credentialsProvider.requestedHosts, ["127.0.0.1:5000"])
   }
+
+  func testImproperlyFormattedHost() throws {
+    for host in ["https://ghcr.io", "http://127.0.0.1:5000"] {
+      XCTAssertThrowsError(try Registry(host: host, namespace: "org/repo")) { error in
+        XCTAssertEqual("\(error)", "improperly formatted host \"\(host)\" was provided, make sure that it doesn't start with http:// or https://")
+      }
+    }
+
+    XCTAssertThrowsError(try Registry(host: "ghcr.io:abc", namespace: "org/repo")) { error in
+      XCTAssertEqual("\(error)", "improperly formatted host \"ghcr.io:abc\" was provided")
+    }
+  }
 }
 
 fileprivate class RecordingCredentialsProvider: CredentialsProvider {
