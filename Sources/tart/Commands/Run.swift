@@ -802,7 +802,9 @@ struct Run: AsyncParsableCommand {
       allDirectoryShares.append(try DirectoryShare(parseFrom: rawDir))
     }
 
-    return try Dictionary(grouping: allDirectoryShares, by: {$0.mountTag}).map { mountTag, directoryShares in
+    // Sorted by tag: a Dictionary's order differs between runs, and a saved state only restores
+    // into the same device order it was saved with ("invalid argument" otherwise)
+    return try Dictionary(grouping: allDirectoryShares, by: {$0.mountTag}).sorted { $0.key < $1.key }.map { mountTag, directoryShares in
       let sharingDevice = VZVirtioFileSystemDeviceConfiguration(tag: mountTag)
 
       var allNamedShares = true
