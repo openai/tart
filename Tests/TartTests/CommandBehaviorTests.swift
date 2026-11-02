@@ -239,6 +239,39 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testRenameRejectsRunningVM() async throws {
+    try await withTemporaryTartHome {
+      let vmDir = try makeStandaloneVM(named: "vm", diskContents: "vm")
+
+      // Hold the VM's PID lock from another process, like "tart run" does
+      let holder = Process()
+      holder.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+      holder.arguments = [
+        "-MFcntl", "-e",
+        #"open(my $f, "+<", shift) or die; fcntl($f, F_SETLK, pack("qqiss", 0, 0, 0, F_WRLCK, SEEK_SET)) or die; $| = 1; print "locked\n"; sleep"#,
+        vmDir.configURL.path,
+      ]
+      let stdout = Pipe()
+      holder.standardOutput = stdout
+      try holder.run()
+      defer {
+        holder.terminate()
+        holder.waitUntilExit()
+      }
+      _ = stdout.fileHandleForReading.availableData
+
+      do {
+        try await Rename.parse(["vm", "renamed"]).run()
+        XCTFail("expected renaming a running VM to be rejected")
+      } catch let error as RuntimeError {
+        XCTAssertEqual(error.description, "VM \"vm\" is running")
+      }
+
+      XCTAssertTrue(try VMStorageLocal().exists("vm"))
+      XCTAssertFalse(try VMStorageLocal().exists("renamed"))
+    }
+  }
+
   func testClonePreservesIncompleteDestination() async throws {
     try await withTemporaryTartHome {
       _ = try makeStandaloneVM(named: "source", diskContents: "source")
