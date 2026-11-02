@@ -144,6 +144,11 @@ final class CommandBehaviorTests: XCTestCase {
     XCTAssertNoThrow(try Push.parse(["vm", "example.com/org/vm:latest", "--chunk-size", "0"]))
   }
 
+  func testLoginRejectsImproperlyFormattedHostWithoutValidation() {
+    XCTAssertThrowsError(try Login.parse(["--no-validate", "https://ghcr.io"]))
+    XCTAssertNoThrow(try Login.parse(["--no-validate", "ghcr.io"]))
+  }
+
   func testCreateRejectsRemoteName() {
     XCTAssertThrowsError(try Create.parse(["org/vm", "--linux"]))
     XCTAssertNoThrow(try Create.parse(["vm", "--linux"]))
