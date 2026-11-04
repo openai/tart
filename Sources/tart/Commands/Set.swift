@@ -20,8 +20,18 @@ struct Set: AsyncParsableCommand {
   @Flag(inversion: .prefixedNo, help: ArgumentHelp("Whether to automatically reconfigure the VM's display to fit the window"))
   var displayRefit: Bool? = nil
 
-  @Option(help: ArgumentHelp("MAC address to use."))
-  var mac: String?
+  @Option(help: ArgumentHelp("MAC address to use."), transform: { value in
+    guard let address = VZMACAddress(string: value) else {
+      throw ValidationError("'\(value)' is not a valid MAC address")
+    }
+
+    guard address.isUnicastAddress else {
+      throw ValidationError("'\(value)' is not a unicast MAC address")
+    }
+
+    return address
+  })
+  var mac: VZMACAddress?
 
   @Flag(help: ArgumentHelp("Generate a new random MAC address for the VM."))
   var randomMAC: Bool = false
@@ -41,7 +51,12 @@ struct Set: AsyncParsableCommand {
   var diskSize: UInt16?
 
   func run() async throws {
-    let vmDir = try VMStorageLocal().open(name)
+    // Serialize configuration updates with "tart clone" and "tart run"
+    let storageLock = try FileLock(lockURL: Config().tartHomeDir)
+    try storageLock.lock()
+
+    let localStorage = try VMStorageLocal()
+    let vmDir = try localStorage.open(name)
 
     // Replacing disk.img would leave a stacked VM with both disk.img and
     // overlay.asif, which is not a supported local layout. Reject before
@@ -78,16 +93,29 @@ struct Set: AsyncParsableCommand {
       vmConfig.displayRefit = displayRefit
     }
 
-    if let mac = mac {
-      if let macAddress = VZMACAddress.init(string: mac), macAddress.isUnicastAddress {
-        vmConfig.macAddress = macAddress
-      } else {
-        throw ValidationError("'\(mac)' is not a valid unicast MAC address")
+    if let mac, mac.string != vmConfig.macAddress.string {
+      // A running or suspended VM must retain its MAC address
+      if try vmDir.state() != .Stopped {
+        throw ValidationError("MAC address cannot be changed while the VM is running or suspended")
       }
+
+      if try localStorage.hasVMsWithMACAddress(macAddress: mac.string) {
+        throw ValidationError("MAC address '\(mac.string)' is already used by another VM")
+      }
+
+      vmConfig.macAddress = mac
     }
 
     if randomMAC {
-      vmConfig.macAddress = VZMACAddress.randomLocallyAdministered()
+      // A running or suspended VM must retain its MAC address
+      if try vmDir.state() != .Stopped {
+        throw ValidationError("MAC address cannot be changed while the VM is running or suspended")
+      }
+
+      // Retry collisions, including the VM's current address
+      repeat {
+        vmConfig.macAddress = VZMACAddress.randomLocallyAdministered()
+      } while try localStorage.hasVMsWithMACAddress(macAddress: vmConfig.macAddress.string)
     }
 
     #if arch(arm64)
@@ -97,6 +125,7 @@ struct Set: AsyncParsableCommand {
     #endif
 
     try vmConfig.save(toURL: vmDir.configURL)
+    try storageLock.unlock()
 
     if let disk = disk {
       let temporaryDiskURL = try Config().tartTmpDir.appendingPathComponent("set-disk-\(UUID().uuidString)")

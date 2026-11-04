@@ -331,6 +331,95 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testSetRejectsInvalidMACAtParseTime() {
+    let invalidAddresses = [
+      ("not-a-mac", "not a valid MAC address"),
+      ("01:00:5E:00:00:01", "not a unicast MAC address"),
+    ]
+
+    // Reject malformed and multicast addresses before running the command
+    for (value, reason) in invalidAddresses {
+      XCTAssertThrowsError(try Set.parse(["vm", "--mac", value])) { error in
+        XCTAssertTrue(Set.message(for: error).contains("'\(value)' is \(reason)"))
+      }
+    }
+  }
+
+  func testSetRejectsOccupiedMAC() async throws {
+    try await withTemporaryTartHome {
+      let target = try makeStandaloneVM(named: "target", diskContents: "target")
+      let other = try makeStandaloneVM(named: "other", diskContents: "other")
+      let occupiedMAC = try other.macAddress()
+      let originalConfig = try Data(contentsOf: target.configURL)
+      let command = try Set.parse(["target", "--mac", occupiedMAC])
+
+      // Reject the occupied address before saving the target configuration
+      do {
+        try await command.run()
+        XCTFail("expected an occupied MAC to be rejected")
+      } catch let error as ValidationError {
+        XCTAssertTrue(error.message.contains("already used by another VM"))
+      }
+
+      XCTAssertEqual(try Data(contentsOf: target.configURL), originalConfig)
+    }
+  }
+
+  func testSetAcceptsUnusedMAC() async throws {
+    try await withTemporaryTartHome {
+      let target = try makeStandaloneVM(named: "target", diskContents: "target")
+      let freeMAC = "02:00:00:00:00:42"
+      let command = try Set.parse(["target", "--mac", freeMAC])
+
+      try await command.run()
+
+      XCTAssertEqual(try target.macAddress(), freeMAC)
+    }
+  }
+
+  func testSetRejectsMACChangeWhileSuspended() async throws {
+    try await withTemporaryTartHome {
+      let target = try makeStandaloneVM(named: "target", diskContents: "target")
+
+      // Saved-state presence marks the fixture as suspended
+      try Data().write(to: target.stateURL)
+
+      let originalConfig = try Data(contentsOf: target.configURL)
+      let command = try Set.parse(["target", "--mac", "02:00:00:00:00:42"])
+
+      // Reject the MAC change before saving the target configuration
+      do {
+        try await command.run()
+        XCTFail("expected changing a suspended VM's MAC to be rejected")
+      } catch let error as ValidationError {
+        XCTAssertTrue(error.message.contains("running or suspended"))
+      }
+
+      XCTAssertEqual(try Data(contentsOf: target.configURL), originalConfig)
+    }
+  }
+
+  func testSetAcceptsUnchangedSharedMACWhileSuspended() async throws {
+    try await withTemporaryTartHome {
+      let target = try makeStandaloneVM(named: "target", diskContents: "target")
+      let other = try makeStandaloneVM(named: "other", diskContents: "other")
+
+      // Give both VM fixtures the same MAC address
+      let sharedConfig = try VMConfig(fromURL: target.configURL)
+      try sharedConfig.save(toURL: other.configURL)
+
+      // Saved-state presence marks the target as suspended
+      let savedState = Data("saved state".utf8)
+      try savedState.write(to: target.stateURL)
+
+      let command = try Set.parse(["target", "--mac", sharedConfig.macAddress.string])
+      try await command.run()
+
+      XCTAssertEqual(try target.macAddress(), sharedConfig.macAddress.string)
+      XCTAssertEqual(try Data(contentsOf: target.stateURL), savedState)
+    }
+  }
+
   func testRemoteAdditionalDiskRetainsTemporaryBackingFileLock() throws {
     try withTemporaryTartHome {
       let storage = try VMStorageOCI()
