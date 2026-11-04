@@ -1,5 +1,6 @@
 import Foundation
 import ArgumentParser
+import Virtualization
 import XCTest
 @testable import tart
 
@@ -356,6 +357,25 @@ final class CommandBehaviorTests: XCTestCase {
 
       try Config().gc()
       XCTAssertTrue(try temporaryEntries().isEmpty)
+    }
+  }
+
+  func testRemoteAdditionalDiskHonorsDiskOptions() throws {
+    try withTemporaryTartHome {
+      let storage = try VMStorageOCI()
+      let name = try RemoteName("example.com/org/image:latest")
+      let cachedImage = try storage.create(name)
+      try config().save(toURL: cachedImage.configURL)
+      XCTAssertTrue(FileManager.default.createFile(atPath: cachedImage.nvramURL.path, contents: Data()))
+      XCTAssertTrue(FileManager.default.createFile(
+        atPath: cachedImage.diskURL.path,
+        contents: Data(repeating: 0, count: 4096)
+      ))
+
+      let additionalDisk = try AdditionalDisk(parseFrom: "\(name):caching=cached,sync=none")
+      let attachment = try XCTUnwrap(additionalDisk.configuration.attachment as? VZDiskImageStorageDeviceAttachment)
+      XCTAssertEqual(attachment.cachingMode, .cached)
+      XCTAssertEqual(attachment.synchronizationMode, .none)
     }
   }
 
