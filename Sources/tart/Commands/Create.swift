@@ -22,6 +22,9 @@ struct Create: AsyncParsableCommand {
   @Option(help: ArgumentHelp("Disk image format", discussion: "ASIF format provides better performance but requires macOS 26 Tahoe or later"))
   var diskFormat: DiskImageFormat = .raw
 
+  @Flag(help: "overwrite an existing local VM")
+  var overwrite: Bool = false
+
   func validate() throws {
     if name.contains("/") {
       throw ValidationError("<name> should be a local name")
@@ -43,6 +46,10 @@ struct Create: AsyncParsableCommand {
   }
 
   func run() async throws {
+    let localStorage = try VMStorageLocal()
+
+    try rejectExistingDestination(localStorage)
+
     let tmpVMDir = try VMDirectory.temporary()
 
     // Lock the temporary VM directory to prevent it's garbage collection
@@ -82,9 +89,17 @@ struct Create: AsyncParsableCommand {
       let storageLock = try FileLock(lockURL: Config().tartHomeDir)
       try storageLock.lock()
       defer { withExtendedLifetime(storageLock) {} }
-      try VMStorageLocal().move(name, from: tmpVMDir)
+      try rejectExistingDestination(localStorage)
+      try localStorage.move(name, from: tmpVMDir)
     }, onCancel: {
       try? FileManager.default.removeItem(at: tmpVMDir.baseURL)
     })
+  }
+
+  private func rejectExistingDestination(_ localStorage: VMStorageLocal) throws {
+    let destinationURL = localStorage.baseURL.appendingPathComponent(name, isDirectory: true)
+    if !overwrite && FileManager.default.fileExists(atPath: destinationURL.path) {
+      throw ValidationError("VM \"\(name)\" already exists, use --overwrite to replace it")
+    }
   }
 }
