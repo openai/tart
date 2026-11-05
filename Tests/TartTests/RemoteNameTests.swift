@@ -30,6 +30,9 @@ final class RemoteNameTests: XCTestCase {
     XCTAssertEqual(try? RemoteName("touché.fr/a/b:latest"), nil)
     XCTAssertEqual(try? RemoteName("ghcr.io/tou/ché:latest"), nil)
     XCTAssertEqual(try? RemoteName("ghcr.io/a/b:touché"), nil)
+
+    // Same as above, but with "é" decomposed into "e" and a combining acute accent
+    XCTAssertEqual(try? RemoteName("ghcr.io/a/b:touche\u{301}"), nil)
   }
 
   func testLocal() throws {
