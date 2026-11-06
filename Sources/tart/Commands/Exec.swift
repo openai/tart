@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import GRPC
+import NIOPosix
 import Cirruslabs_TartGuestAgent_Grpc_Swift
 
 struct ExecCustomExitCodeError: Error {
@@ -72,154 +73,112 @@ struct Exec: AsyncParsableCommand {
     }
   }
 
-  private func execute(_ channel: GRPCChannel) async throws {
-    let agentAsyncClient = AgentAsyncClient(channel: channel)
-    let execCall = agentAsyncClient.makeExecCall()
-
-    try await execCall.requestStream.send(.with {
-      $0.type = .command(.with {
-        $0.name = command[0]
-        $0.args = Array(command.dropFirst(1))
-        $0.interactive = interactive
-        $0.tty = tty
-        if tty {
-          $0.terminalSize = .with {
-            let (width, height) = try! Term.GetSize()
-
-            $0.cols = UInt32(width)
-            $0.rows = UInt32(height)
-          }
-        }
+  // File handles are parameters so the protocol can be exercised without a VM or
+  // replacing the process's standard descriptors.
+  func execute(
+    _ channel: GRPCChannel,
+    input: FileHandle = .standardInput,
+    stdout: FileHandle = .standardOutput,
+    stderr: FileHandle = .standardError,
+    terminalSize: @escaping () throws -> (width: UInt16, height: UInt16) = Term.GetSize
+  ) async throws {
+    let eventLoop = MultiThreadedEventLoopGroup.singleton.next()
+    let io = try ExecIO(fileDescriptors: [stdout.fileDescriptor, stderr.fileDescriptor] +
+      (interactive ? [input.fileDescriptor] : []))
+    let output = ExecOutput(eventLoop: eventLoop, stdout: io.channels[0], stderr: io.channels[1])
+    let execCall = AgentNIOClient(channel: channel).exec(
+      callOptions: CallOptions(eventLoopPreference: .exact(eventLoop)),
+      handler: output.receive
+    )
+    execCall.status.whenComplete { result in
+      output.end(result.flatMap { status in
+        status.isOk ? .success(()) : .failure(status)
       })
-    })
+    }
 
-    // Process command events and optionally send our standard input and/or terminal dimensions
-    try await withThrowingTaskGroup { group in
-      // Stream host's standard input if interactive mode is enabled
-      if interactive {
-        let stdinStream = AsyncThrowingStream<Data, Error> { continuation in
-          let handle = FileHandle.standardInput
-
-          if isRegularFile(handle.fileDescriptor) {
-            // Standard input can be a regular file when input redirection (<) is used,
-            // in which case the handle won't receive any new readability events, so we
-            // just read the file normally here in chunks and consider done with it
-            //
-            // Ideally this is best handled by using non-blocking I/O, but Swift's
-            // standard library only offers inefficient bytes[1] property and SwiftNIO's
-            // NIOFileSystem doesn't seem to support opening raw file descriptors.
-            //
-            // [1]: https://developer.apple.com/documentation/foundation/filehandle/bytes
-            while true {
-              do {
-                let data = try handle.read(upToCount: 64 * 1024)
-                if let data = data {
-                  continuation.yield(data)
-                } else {
-                  continuation.finish()
-                  break
-                }
-              } catch (let error) {
-                continuation.finish(throwing: error)
-                break
-              }
-            }
-          } else {
-            handle.readabilityHandler = { handle in
-              let data = handle.availableData
-
-              if data.isEmpty {
-                // EOF: unregister the handler, otherwise the fd stays permanently
-                // "readable" and Foundation re-invokes us in a tight loop, burning
-                // 100% of a core for the rest of the command's lifetime
-                handle.readabilityHandler = nil
-
-                continuation.finish()
-              } else {
-                continuation.yield(data)
-              }
-            }
-          }
+    do {
+      try await withTaskCancellationHandler {
+        defer {
+          execCall.cancel(promise: nil)
+          output.cancel()
         }
+        try Task.checkCancellation()
+        let subchannel = try await execCall.subchannel.get()
+        try await output.configure(subchannel)
 
-        group.addTask {
-          for try await stdinData in stdinStream {
-            try await execCall.requestStream.send(.with {
-              $0.type = .standardInput(.with {
-                $0.data = stdinData
-              })
-            })
-          }
+        let initialSize = try tty ? terminalSize() : nil
+        try await execCall.sendMessage(.with {
+          $0.type = .command(.with {
+            $0.name = command[0]
+            $0.args = Array(command.dropFirst(1))
+            $0.interactive = interactive
+            $0.tty = tty
+            if let initialSize {
+              $0.terminalSize = .with {
+                $0.cols = UInt32(initialSize.width)
+                $0.rows = UInt32(initialSize.height)
+              }
+            }
+          })
+        }).get()
 
-          // Signal EOF as we're done reading standard input
-          try await execCall.requestStream.send(.with {
-            $0.type = .standardInput(.with {
-              $0.data = Data()
+        let stdin = interactive ? ExecInput(io: io.channels[2]) : nil
+        defer { stdin?.cancel() }
+        let resize = tty ? ExecResize(size: terminalSize) { width, height in
+          execCall.sendMessage(.with {
+            $0.type = .terminalResize(.with {
+              $0.cols = UInt32(width)
+              $0.rows = UInt32(height)
             })
           })
-        }
-      }
+        } onError: { error in
+          output.end(.failure(error))
+        } : nil
+        defer { resize?.cancel() }
 
-      // Stream host's terminal dimensions if pseudo-terminal is requested
-      signal(SIGWINCH, SIG_IGN)
-      let sigwinchSrc = DispatchSource.makeSignalSource(signal: SIGWINCH)
-      sigwinchSrc.activate()
-
-      if tty {
-        let terminalDimensionsStream = AsyncStream { continuation in
-          sigwinchSrc.setEventHandler {
-            continuation.yield(try! Term.GetSize())
+        try await withThrowingTaskGroup(of: Bool.self) { group in
+          if let stdin {
+            group.addTask {
+              do {
+                try await sendExecInput(stdin) { data in
+                  // Unlike grpc-swift 1.x's async writer, this future follows the
+                  // write through HTTP/2 flow control and the socket write buffer.
+                  try await execCall.sendMessage(.with {
+                    $0.type = .standardInput(.with { $0.data = data })
+                  }).get()
+                }
+              } catch {
+                // Resolve errors on the response path so an exit already received
+                // wins over the failure of an outstanding write on the closed RPC.
+                output.end(.failure(error))
+              }
+              return false
+            }
+          }
+          group.addTask {
+            try await output.completion.futureResult.get()
+            return true
+          }
+          defer {
+            group.cancelAll()
+            stdin?.cancel()
+            execCall.cancel(promise: nil)
+            output.cancel()
+          }
+          // Stdin EOF must not end the response reader. Conversely, normal RPC
+          // completion must cancel idle stdin just as an explicit exit event does.
+          while let responsesEnded = try await group.next() {
+            if responsesEnded { break }
           }
         }
-
-        group.addTask {
-          for await (width, height) in terminalDimensionsStream {
-            try await execCall.requestStream.send(.with {
-              $0.type = .terminalResize(.with {
-                $0.cols = UInt32(width)
-                $0.rows = UInt32(height)
-              })
-            })
-          }
-        }
+      } onCancel: {
+        execCall.cancel(promise: nil)
+        output.cancel()
       }
-
-      // Process command events
-      group.addTask {
-        for try await response in execCall.responseStream {
-          switch response.type {
-          case .standardOutput(let ioChunk):
-            try FileHandle.standardOutput.write(contentsOf: ioChunk.data)
-          case .standardError(let ioChunk):
-            try FileHandle.standardError.write(contentsOf: ioChunk.data)
-          case .exit(let exit):
-            throw ExecCustomExitCodeError(exitCode: exit.code)
-          default:
-            // Unknown event, do nothing
-            continue
-          }
-        }
-      }
-
-      while !group.isEmpty {
-        do {
-          try await group.next()
-        } catch {
-          group.cancelAll()
-
-          throw error
-        }
-      }
+    } catch {
+      await io.close()
+      throw error
     }
+    await io.close()
   }
-}
-
-private func isRegularFile(_ fileDescriptor: Int32) -> Bool {
-  var stat = stat()
-
-  if fstat(fileDescriptor, &stat) != 0 {
-    return false
-  }
-
-  return (stat.st_mode & S_IFMT) == S_IFREG
 }
