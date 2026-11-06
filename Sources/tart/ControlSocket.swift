@@ -37,6 +37,7 @@ class ControlSocket {
 
     do {
       self.serverChannel = try await ServerBootstrap(group: eventLoopGroup)
+        .childChannelOption(.allowRemoteHalfClosure, value: true)
         .serverChannelInitializer { channel in
           channel.pipeline.addHandler(
             ControlSocketAcceptErrorHandler(),
@@ -46,7 +47,8 @@ class ControlSocket {
         .bind(unixDomainSocketPath: controlSocketURL.relativePath) { childChannel in
           childChannel.eventLoop.makeCompletedFuture {
             return try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
-              wrappingChannelSynchronously: childChannel
+              wrappingChannelSynchronously: childChannel,
+              configuration: Self.proxiedChannelConfiguration
             )
           }
         }
@@ -87,30 +89,22 @@ class ControlSocket {
         // which may result in "tart run" crashing because of NIO's fatal assertion on EBADF.
         let vmSocket = try duplicateAndCloseConnection(vmConnection)
 
-        let vmChannel = try await ClientBootstrap(group: eventLoopGroup).withConnectedSocket(vmSocket) { childChannel in
-          childChannel.eventLoop.makeCompletedFuture {
-            try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
-              wrappingChannelSynchronously: childChannel
-            )
+        let vmChannel = try await ClientBootstrap(group: eventLoopGroup)
+          .channelOption(.allowRemoteHalfClosure, value: true)
+          .withConnectedSocket(vmSocket) { childChannel in
+            childChannel.eventLoop.makeCompletedFuture {
+              try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
+                wrappingChannelSynchronously: childChannel,
+                configuration: Self.proxiedChannelConfiguration
+              )
+            }
           }
-        }
 
         try await vmChannel.executeThenClose { (vmInbound, vmOutbound) in
-          try await withThrowingDiscardingTaskGroup { group in
-            // Proxy data from a client (e.g. "tart exec") to a VM
-            group.addTask {
-              for try await message in clientInbound {
-                try await vmOutbound.write(message)
-              }
-            }
-
-            // Proxy data from a VM to a client (e.g. "tart exec")
-            group.addTask {
-              for try await message in vmInbound {
-                try await clientOutbound.write(message)
-              }
-            }
-          }
+          await Self.proxy(
+            client: clientChannel, clientInbound: clientInbound, clientOutbound: clientOutbound,
+            vm: vmChannel, vmInbound: vmInbound, vmOutbound: vmOutbound
+          )
         }
 
         self.logger.info("control socket client disconnected")
@@ -118,6 +112,64 @@ class ControlSocket {
         self.logger.error("control socket connection failed: \(error)")
       }
     }
+  }
+
+  // Both channels are created with remote half-closure allowed, so that an EOF from one side
+  // ends its inbound stream instead of closing the whole channel, and with outbound half-closure
+  // enabled, so that finishing an outbound writer shuts down the socket's write side.
+  static let proxiedChannelConfiguration = NIOAsyncChannel<ByteBuffer, ByteBuffer>.Configuration(
+    isOutboundHalfClosureEnabled: true
+  )
+
+  /// Proxies data between a client (e.g. "tart exec") and a VM until both sides hang up.
+  ///
+  /// When one side hangs up, its EOF is passed on to the other side, which then hangs up too.
+  /// Without this, a client that disconnected left the connection to the VM open: the guest
+  /// agent's gRPC server keeps an idle connection until it sees EOF, so every "tart exec"
+  /// leaked a VirtIO socket connection, and with it a file descriptor in both "tart run" and
+  /// Virtualization.framework's VM process, which crashes once it runs out of them.
+  static func proxy(
+    client: NIOAsyncChannel<ByteBuffer, ByteBuffer>,
+    clientInbound: NIOAsyncChannelInboundStream<ByteBuffer>,
+    clientOutbound: NIOAsyncChannelOutboundWriter<ByteBuffer>,
+    vm: NIOAsyncChannel<ByteBuffer, ByteBuffer>,
+    vmInbound: NIOAsyncChannelInboundStream<ByteBuffer>,
+    vmOutbound: NIOAsyncChannelOutboundWriter<ByteBuffer>
+  ) async {
+    await withDiscardingTaskGroup { group in
+      // Proxy data from a client (e.g. "tart exec") to a VM
+      group.addTask {
+        await pipe(clientInbound, to: vmOutbound, of: vm.channel)
+      }
+
+      // Proxy data from a VM to a client (e.g. "tart exec")
+      group.addTask {
+        await pipe(vmInbound, to: clientOutbound, of: client.channel)
+      }
+    }
+  }
+
+  private static func pipe(
+    _ inbound: NIOAsyncChannelInboundStream<ByteBuffer>,
+    to outbound: NIOAsyncChannelOutboundWriter<ByteBuffer>,
+    of channel: Channel
+  ) async {
+    // Either direction ending, even with an error, leaves the other one running, so that it
+    // can still deliver what its side sent before hanging up.
+    do {
+      for try await message in inbound {
+        try await outbound.write(message)
+      }
+
+      // A write returns once the channel has the data, not once it's in the socket. Shutting
+      // down the output of a channel whose input is already closed closes it completely, which
+      // drops writes that are still pending, so wait for them first: writes complete in order.
+      try await channel.writeAndFlush(ByteBuffer()).get()
+    } catch {
+      // The connection is gone, so there is nothing left to deliver over it
+    }
+
+    outbound.finish()
   }
 
   private func duplicateAndCloseConnection(_ connection: VZVirtioSocketConnection) throws -> CInt {

@@ -168,6 +168,125 @@ final class ControlSocketTests: XCTestCase {
     try await eventLoopGroup.shutdownGracefully()
   }
 
+  func testProxyPassesClientHangUpToVM() async throws {
+    try await withProxy { client, vm in
+      // "tart exec" closes its connection once it has its response. The guest agent
+      // only closes its end once it sees EOF, so the proxy has to pass it on.
+      try await client.executeThenClose { _, outbound in
+        try await outbound.write(ByteBuffer(string: "request"))
+      }
+
+      try await vm.executeThenClose { inbound, _ in
+        let received = try await Self.readToEnd(inbound)
+        XCTAssertEqual(received, Array("request".utf8))
+      }
+    }
+  }
+
+  func testProxyPassesVMHangUpToClient() async throws {
+    try await withProxy { client, vm in
+      try await vm.executeThenClose { _, outbound in
+        try await outbound.write(ByteBuffer(string: "response"))
+      }
+
+      try await client.executeThenClose { inbound, _ in
+        let received = try await Self.readToEnd(inbound)
+        XCTAssertEqual(received, Array("response".utf8))
+      }
+    }
+  }
+
+  func testProxyDeliversBufferedDataBeforeHangingUp() async throws {
+    let request = (0..<(8 * 1024 * 1024)).map { UInt8(truncatingIfNeeded: $0 &* 31) }
+    let response = (0..<(8 * 1024 * 1024)).map { UInt8(truncatingIfNeeded: $0 &* 17) }
+
+    try await withProxy { client, vm in
+      // Each side writes more than the socket buffers hold and hangs up right away,
+      // so the proxy still holds unwritten data when it sees the EOF.
+      async let clientReceived: [UInt8] = client.executeThenClose { inbound, outbound in
+        try await outbound.write(ByteBuffer(bytes: request))
+        outbound.finish()
+        return try await Self.readToEnd(inbound)
+      }
+      async let vmReceived: [UInt8] = vm.executeThenClose { inbound, outbound in
+        try await outbound.write(ByteBuffer(bytes: response))
+        outbound.finish()
+        return try await Self.readToEnd(inbound)
+      }
+
+      let (fromVM, fromClient) = try await (clientReceived, vmReceived)
+      XCTAssertEqual(fromClient.count, request.count)
+      XCTAssertTrue(fromClient == request, "The VM did not receive the client's data intact")
+      XCTAssertEqual(fromVM.count, response.count)
+      XCTAssertTrue(fromVM == response, "The client did not receive the VM's data intact")
+    }
+  }
+
+  private typealias ProxyEnd = NIOAsyncChannel<ByteBuffer, ByteBuffer>
+
+  /// Runs ControlSocket's proxy between two socket pairs, as "tart run" does between a control
+  /// socket client and a VM, and hands `body` the far ends: the client's and the VM's.
+  private func withProxy(_ body: (ProxyEnd, ProxyEnd) async throws -> Void) async throws {
+    let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+
+    do {
+      let (client, proxyClient) = try await makeSocketPair(eventLoopGroup)
+      let (proxyVM, vm) = try await makeSocketPair(eventLoopGroup)
+
+      let proxy = Task {
+        try await proxyClient.executeThenClose { clientInbound, clientOutbound in
+          try await proxyVM.executeThenClose { vmInbound, vmOutbound in
+            await ControlSocket.proxy(
+              client: proxyClient, clientInbound: clientInbound, clientOutbound: clientOutbound,
+              vm: proxyVM, vmInbound: vmInbound, vmOutbound: vmOutbound
+            )
+          }
+        }
+      }
+
+      // A proxy that doesn't pass on an EOF would leave the reads in `body` waiting forever.
+      let timeout = Task {
+        try await Task.sleep(for: .seconds(10))
+        XCTFail("The proxy did not pass on a hang-up")
+        proxyClient.channel.close(promise: nil)
+        proxyVM.channel.close(promise: nil)
+      }
+      defer { timeout.cancel() }
+
+      try await body(client, vm)
+      try await proxy.value
+    } catch {
+      try? await eventLoopGroup.shutdownGracefully()
+      throw error
+    }
+    try await eventLoopGroup.shutdownGracefully()
+  }
+
+  private func makeSocketPair(_ eventLoopGroup: EventLoopGroup) async throws -> (ProxyEnd, ProxyEnd) {
+    var descriptors: [CInt] = [-1, -1]
+    XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &descriptors), 0)
+
+    func wrap(_ descriptor: CInt) async throws -> ProxyEnd {
+      try await ClientBootstrap(group: eventLoopGroup)
+        .channelOption(.allowRemoteHalfClosure, value: true)
+        .withConnectedSocket(descriptor) { channel in
+          channel.eventLoop.makeCompletedFuture {
+            try ProxyEnd(wrappingChannelSynchronously: channel, configuration: ControlSocket.proxiedChannelConfiguration)
+          }
+        }
+    }
+
+    return (try await wrap(descriptors[0]), try await wrap(descriptors[1]))
+  }
+
+  private static func readToEnd(_ inbound: NIOAsyncChannelInboundStream<ByteBuffer>) async throws -> [UInt8] {
+    var received: [UInt8] = []
+    for try await buffer in inbound {
+      received += buffer.readableBytesView
+    }
+    return received
+  }
+
   private func makeTemporaryDirectory() throws -> URL {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
       UUID().uuidString,
