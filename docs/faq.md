@@ -253,6 +253,20 @@ or newer. Existing standalone raw and ASIF images continue to work on older
 hosts. Keep published lineages shallow when possible: every additional parent
 overlay adds another ASIF file to validate and assemble at run time.
 
+## Booting from a Network Block Device
+
+On macOS 14 (Sonoma) or newer, `tart run --root-disk` attaches the VM's root disk from a [Network Block Device](https://github.com/NetworkBlockDevice/nbd/blob/master/doc/uri.md) URL instead of the local disk image:
+
+```shell
+tart run --root-disk="nbd+unix:///vm-disk?socket=/tmp/vm-disk.sock" <VM>
+```
+
+Supported schemes are `nbd`, `nbds`, `nbd+unix` and `nbds+unix`. Tart does not open the VM's local disk image in this mode, so the NBD server is responsible for the disk contents.
+
+`--root-disk-opts` only accepts `ro`, `sync=none` and `sync=full` with `--root-disk`. Any other option is rejected, including `sync=fsync` and `caching=`, which only apply to local disk images.
+
+A saved machine state is tied to the disk it was suspended with, so `--root-disk` cannot be combined with `--suspendable` or used to resume a suspended VM.
+
 ## Disk resizing
 
 Disk resizing works on most cloud-ready Linux distributions out-of-the box (e.g. Ubuntu Cloud Images have the `cloud-initramfs-growroot` package installed that runs on boot) and on the rest of the distributions by running the `growpart` or `resize2fs` commands.
