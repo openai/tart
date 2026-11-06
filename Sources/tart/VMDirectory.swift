@@ -360,16 +360,16 @@ struct VMDirectory: Prunable {
 
     do {
       try process.run()
-      process.waitUntilExit()
-
-      let data = pipe.fileHandleForReading.readDataToEndOfFile()
-
-      if process.terminationStatus != 0 {
-        let output = String(data: data, encoding: .utf8) ?? "Unknown error"
-        throw RuntimeError.FailedToResizeDisk("Failed to resize ASIF disk image: \(output)")
-      }
     } catch {
       throw RuntimeError.FailedToResizeDisk("Failed to execute diskutil resize: \(error)")
+    }
+    process.waitUntilExit()
+
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+
+    if process.terminationStatus != 0 {
+      let output = String(data: data, encoding: .utf8) ?? "Unknown error"
+      throw RuntimeError.FailedToResizeDisk("Failed to resize ASIF disk image: \(output)")
     }
   }
 

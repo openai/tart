@@ -95,6 +95,27 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testASIFResizeFailureIsReportedOnce() throws {
+    try withTemporaryTartHome {
+      let previousPath = try installUnavailableDiskutil(beforeFailure: """
+      if [ "$2" = info ]; then
+        echo '<plist version="1.0"><dict><key>Size</key><integer>1000000000</integer></dict></plist>'
+        exit 0
+      fi
+      """)
+      defer { restoreEnvironment("PATH", to: previousPath) }
+
+      let vmDir = try makeStandaloneVM(named: "asif", diskContents: "disk")
+      var vmConfig = try VMConfig(fromURL: vmDir.configURL)
+      vmConfig.diskFormat = .asif
+      try vmConfig.save(toURL: vmDir.configURL)
+
+      XCTAssertThrowsError(try vmDir.resizeDisk(2)) { error in
+        XCTAssertEqual("\(error)", "Failed to resize ASIF disk image: Resource temporarily unavailable\n")
+      }
+    }
+  }
+
   func testGetSurvivesUnavailableDiskCapacity() async throws {
     try await withTemporaryTartHome {
       let previousPath = try installUnavailableDiskutil()
