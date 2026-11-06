@@ -154,6 +154,20 @@ sudo ufw allow ssh
 By default, a Tart VM uses 2 CPUs and 4 GB of memory with a `1024x768` display. This can be changed after VM creation with `tart set` command.
 Please refer to `tart set --help` for additional details.
 
+### Freeing up memory (best-effort memory reclaim)
+
+A Tart VM reserves its configured memory size while running. Linux VMs get a virtio memory balloon device attached automatically, which allows the host to ask the guest OS to release the memory it doesn't currently need.
+
+To make use of it, run a Linux VM with a graphical console and enable *Control* → *Free Up Memory*. The guest is then asked to shrink its memory footprint as much as it can, for as long as the option stays enabled (guest reboots included). Disabling it gives the memory back to the guest.
+
+Be aware of the following limitations:
+
+* **This is best-effort memory reclaim, not dynamic memory expansion.** It does not make a VM with 2 GB of real host memory appear as 32 GB to the guest. The guest still sees the configured memory size. It is also not memory hot-add and not transparent host memory overcommit.
+* **The guest may release less memory than asked for, or none at all**, depending on how much of its memory is actually reclaimable.
+* **Host-side reclaim may not be immediately visible.** Even when the guest reaches the target, macOS may keep the released guest memory resident and only reclaim it depending on the macOS version and the host memory pressure. The most reliable effect is on the guest side: the guest constrains its own memory usage.
+* macOS VMs don't get the balloon device, since macOS guests show little to no practical memory reduction.
+* VMs running with `--suspendable` don't get the balloon device either, to not interfere with the suspend/resume support.
+
 ## Mounting directories
 
 To mount a directory, run the VM with the `--dir` argument:
