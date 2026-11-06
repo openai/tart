@@ -4,9 +4,11 @@ import Retry
 
 class VMStorageOCI: PrunableStorage {
   let baseURL: URL
+  private let readOnly: Bool
 
-  init() throws {
-    baseURL = try Config().tartCacheDir.appendingPathComponent("OCIs", isDirectory: true)
+  init(readOnly: Bool = false) throws {
+    self.readOnly = readOnly
+    baseURL = try Config(readOnly: readOnly).tartCacheDir.appendingPathComponent("OCIs", isDirectory: true)
   }
 
   private func vmURL(_ name: RemoteName) -> URL {
@@ -298,6 +300,11 @@ class VMStorageOCI: PrunableStorage {
         continue
       }
 
+      // Records are leaves in the cache namespace. Enumerating their contents
+      // advances the directory access time used by age/LRU pruning, so even a
+      // dry run would change subsequent selections. Only inspect known files.
+      enumerator.skipDescendants()
+
       // Split the relative VM's path at the last component
       // and figure out which character should be used
       // to join them together, either ":" for tags or
@@ -322,9 +329,14 @@ class VMStorageOCI: PrunableStorage {
   }
 
   func prunables() throws -> [Prunable] {
-    let records = try list().filter { (_, _, isSymlink) in
+    try prunables(simulatingRemovalOf: [])
+  }
+
+  func prunables(simulatingRemovalOf removedURLs: Swift.Set<URL>) throws -> [Prunable] {
+    let allRecords = try list().filter { (_, _, isSymlink) in
       !isSymlink
     }.map { (_, vmDir, _) in vmDir }
+    let records = allRecords.filter { !removedURLs.contains($0.url) }
 
     // Attribute shared content to the newest cached image that references it.
     // This counts each file once while charging it to the last record that
@@ -351,7 +363,7 @@ class VMStorageOCI: PrunableStorage {
       }
     }
 
-    let contentStore = try ContentStore()
+    let contentStore = try ContentStore(readOnly: readOnly)
     var ownedContentURLs = [URL: [URL]]()
     for (contentDigest, owner) in contentOwners {
       let contentURL = try contentStore.contentURL(for: contentDigest)
@@ -369,8 +381,14 @@ class VMStorageOCI: PrunableStorage {
       )
     }
 
-    result += try contentStore.prunables(excluding: referencedContentDigests(includeCachedImages: true))
-      .map(ContentPrunable.init)
+    let unreferencedContent = try contentStore.prunables(excluding: referencedContentDigests(
+      includeCachedImages: true, simulatingRemovalOf: removedURLs
+    ))
+    // Every cached-record deletion runs content GC. In a preview these files
+    // still exist on disk, but a real deletion would already have removed them.
+    if records.count == allRecords.count {
+      result += unreferencedContent.filter { !removedURLs.contains($0) }.map(ContentPrunable.init)
+    }
 
     return result
   }
@@ -747,21 +765,49 @@ class VMStorageOCI: PrunableStorage {
 
   /// Returns content referenced outside the OCI cache, optionally including
   /// references published by retained cached images.
-  private func referencedContentDigests(includeCachedImages: Bool) throws -> Swift.Set<String> {
+  private func referencedContentDigests(includeCachedImages: Bool,
+                                        simulatingRemovalOf removedURLs: Swift.Set<URL> = []) throws -> Swift.Set<String> {
     var result = Swift.Set<String>()
 
-    for (_, vmDir) in try VMStorageLocal().list() where vmDir.isStackedVM {
+    for (_, vmDir) in try VMStorageLocal(readOnly: readOnly).list() where vmDir.isStackedVM {
       result.formUnion(try vmDir.diskContentDigests())
     }
+    result.formUnion(try temporaryContentDigests())
 
+    if includeCachedImages {
+      for (_, vmDir, isSymlink) in try list()
+        where !isSymlink && !removedURLs.contains(vmDir.url) && vmDir.isStackedCachedImage {
+        // Malformed cached records are invalid references. Keep scanning so
+        // one interrupted population does not disable content GC globally.
+        if let contentDigests = try? vmDir.diskContentDigests() {
+          result.formUnion(contentDigests)
+        }
+      }
+    }
+
+    return result
+  }
+
+  func temporaryContentDigests() throws -> Swift.Set<String> {
+    var result = Swift.Set<String>()
     // Clone, pull, and import publish their manifest before installing
     // immutable content. Include partially populated temporary directories so
     // pruning cannot race those operations.
-    for url in try FileManager.default.contentsOfDirectory(
-      at: Config().tartTmpDir,
-      includingPropertiesForKeys: [],
-      options: .skipsHiddenFiles
-    ) {
+    let temporaryURLs: [URL]
+    do {
+      temporaryURLs = try FileManager.default.contentsOfDirectory(
+        at: Config(readOnly: readOnly).tartTmpDir,
+        includingPropertiesForKeys: [],
+        options: .skipsHiddenFiles
+      )
+    } catch {
+      if readOnly && error.isFileNotFound() {
+        temporaryURLs = []
+      } else {
+        throw error
+      }
+    }
+    for url in temporaryURLs {
       let vmDir = VMDirectory(baseURL: url)
       guard FileManager.default.fileExists(atPath: vmDir.manifestURL.path),
             let contentDigests = try? vmDir.diskContentDigests() else {
@@ -769,16 +815,6 @@ class VMStorageOCI: PrunableStorage {
       }
 
       result.formUnion(contentDigests)
-    }
-
-    if includeCachedImages {
-      for (_, vmDir, isSymlink) in try list() where !isSymlink && vmDir.isStackedCachedImage {
-        // Malformed cached records are invalid references. Keep scanning so
-        // one interrupted population does not disable content GC globally.
-        if let contentDigests = try? vmDir.diskContentDigests() {
-          result.formUnion(contentDigests)
-        }
-      }
     }
 
     return result

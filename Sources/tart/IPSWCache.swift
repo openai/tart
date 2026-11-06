@@ -3,10 +3,14 @@ import Virtualization
 
 class IPSWCache: PrunableStorage {
   let baseURL: URL
+  private let readOnly: Bool
 
-  init() throws {
-    baseURL = try Config().tartCacheDir.appendingPathComponent("IPSWs", isDirectory: true)
-    try FileManager.default.createDirectory(at: baseURL, withIntermediateDirectories: true)
+  init(readOnly: Bool = false) throws {
+    self.readOnly = readOnly
+    baseURL = try Config(readOnly: readOnly).tartCacheDir.appendingPathComponent("IPSWs", isDirectory: true)
+    if !readOnly {
+      try FileManager.default.createDirectory(at: baseURL, withIntermediateDirectories: true)
+    }
   }
 
   func locationFor(fileName: String) -> URL {
@@ -14,7 +18,14 @@ class IPSWCache: PrunableStorage {
   }
 
   func prunables() throws -> [Prunable] {
-    try FileManager.default.contentsOfDirectory(at: baseURL, includingPropertiesForKeys: nil)
-      .filter { $0.lastPathComponent.hasSuffix(".ipsw")}
+    do {
+      return try FileManager.default.contentsOfDirectory(at: baseURL, includingPropertiesForKeys: nil)
+        .filter { $0.lastPathComponent.hasSuffix(".ipsw")}
+    } catch {
+      if readOnly && error.isFileNotFound() {
+        return []
+      }
+      throw error
+    }
   }
 }

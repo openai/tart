@@ -150,7 +150,11 @@ struct Root: AsyncParsableCommand {
   }
 
   // Run garbage-collection before each command (shouldn't take too long).
-  private static func runGarbageCollection(for command: ParsableCommand) {
+  static func runGarbageCollection(for command: ParsableCommand) {
+    if let prune = command as? Prune, prune.dryRun {
+      return
+    }
+
     if type(of: command) != type(of: Pull()) && type(of: command) != type(of: Clone()) {
       do {
         try Config().gc()
