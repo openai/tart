@@ -25,6 +25,7 @@ class Fetcher {
 
     let stream = AsyncThrowingStream<Data, Error> { continuation in
       delegate.streamContinuation = continuation
+      continuation.onTermination = { @Sendable _ in task.cancel() }
     }
 
     let response = try await withCheckedThrowingContinuation { continuation in
