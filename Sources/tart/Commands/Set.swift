@@ -40,6 +40,28 @@ struct Set: AsyncParsableCommand {
                              """))
   var diskSize: UInt16?
 
+  func validate() throws {
+    if name.contains("/") {
+      throw ValidationError("<name> should be a local name")
+    }
+
+    if randomMAC && mac != nil {
+      throw ValidationError("--random-mac and --mac are mutually exclusive")
+    }
+
+    if let cpu = cpu, cpu == 0 {
+      throw ValidationError("--cpu must be greater than zero")
+    }
+
+    if let memory = memory, memory == 0 {
+      throw ValidationError("--memory must be greater than zero")
+    }
+
+    if let diskSize = diskSize, diskSize == 0 {
+      throw ValidationError("--disk-size must be greater than zero")
+    }
+  }
+
   func run() async throws {
     let vmDir = try VMStorageLocal().open(name)
 
@@ -48,10 +70,6 @@ struct Set: AsyncParsableCommand {
     // saving any other requested configuration changes.
     if disk != nil, vmDir.isStackedVM {
       throw ValidationError("--disk is not supported for VMs with a stacked disk")
-    }
-
-    if randomMAC && mac != nil {
-      throw ValidationError("--random-mac and --mac are mutually exclusive")
     }
 
     var vmConfig = try VMConfig(fromURL: vmDir.configURL)
