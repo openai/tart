@@ -24,6 +24,14 @@ final class FileLockTests: XCTestCase {
     XCTAssertFalse(try secondLock.trylock())
   }
 
+  func testMissingFileResultsInError() throws {
+    let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+
+    XCTAssertThrowsError(try FileLock(lockURL: url)) { error in
+      XCTAssertEqual(error as? FileLockError, .Failed("failed to open lock file \(url): No such file or directory"))
+    }
+  }
+
   private func temporaryFile() -> URL {
     let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
 
