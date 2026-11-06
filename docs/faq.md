@@ -41,6 +41,46 @@ security login-keychain -s login.keychain
 
 Note that this will create a `login.keychain` with an empty password. Consider supplying a different value to `-p` or omitting the `-p` to enter the password interactively. 
 
+!!! warning
+    Deleting the login keychain (for example with `security delete-keychain`) permanently removes every password saved in it, including passwords that other apps and Git credentials rely on. Do not delete it to work around this error. This recipe does not fix a password mismatch; see the next section.
+
+### Keychain password mismatch
+
+The login keychain's password can differ from your account password. When it does, the VM fails to start, and unlocking the keychain fails too:
+
+```shell
+security unlock-keychain ~/Library/Keychains/login.keychain-db
+# The user name or passphrase you entered is not correct.
+```
+
+The VM error can look like this:
+
+```
+Error Domain=VZErrorDomain Code=-9 "The virtual machine encountered a security error."
+... Failed to get current host key ... Failed to create new HostKey ...
+```
+
+`tart ip` then reports `no IP address found, is your VM running?`.
+
+In one reported case, the keychain password was not the account password. Resetting the default keychain made the two match and fixed the error. To check the keychain and its lock settings, run:
+
+```shell
+security show-keychain-info ~/Library/Keychains/login.keychain-db
+```
+
+To reset it, connect over Screen Sharing (see [Log in via GUI at least once](#log-in-via-gui-at-least-once)), then in Keychain Access choose **Keychain Access > Settings > Reset My Default Keychain**. The login keychain's password is set to your account password.
+
+!!! warning
+    The reset deletes the passwords saved in the login keychain. Re-enter any you still need (Git credentials, registry logins and other app passwords). Check each one after the reset.
+
+After the reset, `security unlock-keychain ~/Library/Keychains/login.keychain-db` should succeed, and `tart run --no-graphics` should boot the VM and `tart ip` should return its address.
+
+These did not fix the error in the reported cases, so there is no need to try them first:
+
+* Reinstalling Tart (from Homebrew or the release tarball)
+* Rebooting the Mac
+* Installing or updating the Xcode Command Line Tools
+
 ## Troubleshooting crashes
 
 If you experience a crash or encounter another error while using the tart executable, you can collect debug information to assist with troubleshooting. Run the following command in a separate terminal window to gather logs from the Tart process and the macOS Virtualization subsystem:
