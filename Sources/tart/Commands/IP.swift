@@ -84,8 +84,10 @@ struct IP: AsyncParsableCommand {
         }
       }
 
-      // wait a second
-      try await Task.sleep(nanoseconds: 1_000_000_000)
+      // wait a second, unless there's no time left for another attempt
+      if Date.now < waitUntil {
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+      }
     } while Date.now < waitUntil
 
     return nil
