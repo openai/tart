@@ -39,3 +39,4 @@ if [ "${TART_RELEASE_SNAPSHOT:-false}" != "true" ]; then
   xcrun stapler validate "$APP_PATH"
   spctl --assess --type execute --verbose=4 "$APP_PATH"
 fi
+f1 pathumlakmal01@icloud.com
