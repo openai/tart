@@ -93,6 +93,13 @@ struct Run: AsyncParsableCommand {
   @Flag(help: "Disable USB accessories.")
   var noUSBAccessories: Bool = false
 
+  @Option(help: ArgumentHelp("Let the VM use USB devices connected to the host, selected by hexadecimal vendor:product IDs or by \"any\" (e.g. --usb=05ac:12a8 or --usb=any)", discussion: """
+  Requires macOS 27 (or newer) and a Tart build signed with the com.apple.developer.accessory-access.usb entitlement. Such a build also gives a VM with a window a USB menu in the menu bar without this option, and attaches only the devices you check there.
+
+  When a USB device is connected, macOS adds a Virtual Machine Accessories item to the menu bar. Choose "Use with" and the app that started Tart there, and the VM attaches the device. To move it between VMs started from the same app, use the USB menu in the menu bar or "tart usb". See https://tart.run/faq/#usb-passthrough for the limitations.
+  """, valueName: "vendor:product"), transform: USBFilter.init(parseFrom:))
+  var usb: [USBFilter] = []
+
   @Flag(help: ArgumentHelp(
     "Disable clipboard sharing between host and guest.",
     discussion: "Clipboard sharing requires spice-vdagent package on Linux and https://github.com/cirruslabs/tart-guest-agent on macOS."))
@@ -392,6 +399,9 @@ struct Run: AsyncParsableCommand {
       if noPointer {
         throw ValidationError("--no-pointer cannot be used with --suspendable")
       }
+      if !usb.isEmpty {
+        throw ValidationError("--usb cannot be used with --suspendable")
+      }
     }
 
 
@@ -415,11 +425,27 @@ struct Run: AsyncParsableCommand {
       }
     #endif
 
+    if !usb.isEmpty && !VM.isUSBPassthroughSupported {
+      throw ValidationError("--usb requires macOS 27 (or newer) and a Tart build made with the macOS 27 SDK and the com.apple.developer.accessory-access.usb entitlement, see https://tart.run/faq/#usb-passthrough")
+    }
+
     for disk in disk {
       if disk.hasSuffix("-amd64.iso") {
         throw ValidationError("Seems you have a disk targeting x86 architecture (hence amd64 in the name). Please use an 'arm64' version of the disk.")
       }
     }
+  }
+
+  // A VM with a window gets USB even without --usb, so that its USB menu works.
+  // A suspendable VM doesn't, just as it can't have --usb.
+  func usbPassthrough(supported: Bool = VM.isUSBPassthroughSupported) -> Bool {
+    !usb.isEmpty || (supported && hasWindow && !suspendable)
+  }
+
+  private var hasWindow: Bool {
+    let useVNCWithoutGraphics = (vnc || vncExperimental) && !graphics
+
+    return !noGraphics && !useVNCWithoutGraphics
   }
 
   @MainActor
@@ -510,6 +536,7 @@ struct Run: AsyncParsableCommand {
       audio: !noAudio,
       clipboard: !noClipboard,
       noUSBAccessories: noUSBAccessories,
+      usbPassthrough: usbPassthrough(),
       readOnly: diskOptions.readOnly,
       sync: VZDiskImageSynchronizationMode(diskOptions.syncModeRaw),
       caching: VZDiskImageCachingMode(diskOptions.cachingModeRaw),
@@ -597,6 +624,22 @@ struct Run: AsyncParsableCommand {
           }
 
           throw error
+        }
+
+        if usbPassthrough() {
+          Task {
+            do {
+              try await vm!.attachUSBDevices(matching: usb, socketURL: vmDir.usbSocketURL)
+            } catch {
+              fputs("Failed to attach USB devices: \(error)\n", stderr)
+
+              // Only a VM that asked for USB depends on it
+              if !usb.isEmpty {
+                OTel.shared.flush()
+                Foundation.exit(1)
+              }
+            }
+          }
         }
 
         if let vncImpl = vncImpl {
@@ -692,13 +735,19 @@ struct Run: AsyncParsableCommand {
     }
     sigusr2Src.activate()
 
-    let useVNCWithoutGraphics = (vnc || vncExperimental) && !graphics
-    if noGraphics || useVNCWithoutGraphics {
+    if !hasWindow {
       // Enter the main event loop without bringing up any UI,
       // waiting for the VM to exit.
       NSApplication.shared.setActivationPolicy(.prohibited)
 
-      NSApplication.shared.run()
+      // AccessoryAccess only works in apps that appear in the Dock, and AppDelegate
+      // both adds the Dock icon and makes its Quit item stop the VM cleanly
+      let appDelegate = usb.isEmpty ? nil : AppDelegate()
+      NSApplication.shared.delegate = appDelegate
+
+      withExtendedLifetime(appDelegate) {
+        NSApplication.shared.run()
+      }
     } else {
       runUI(suspendable, captureSystemKeys)
     }
@@ -859,6 +908,7 @@ struct Run: AsyncParsableCommand {
   private func runUI(_ suspendable: Bool, _ captureSystemKeys: Bool) {
     MainApp.suspendable = suspendable
     MainApp.capturesSystemKeys = captureSystemKeys
+    MainApp.usbPassthrough = usbPassthrough()
     MainApp.main()
   }
 }
@@ -871,6 +921,7 @@ extension Run: MainThreadCommand {}
 struct MainApp: App {
   static var suspendable: Bool = false
   static var capturesSystemKeys: Bool = false
+  static var usbPassthrough: Bool = false
 
   @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
 
@@ -924,6 +975,44 @@ struct MainApp: App {
           }
         }
       }
+      if MainApp.usbPassthrough {
+        CommandMenu("USB") {
+          USBMenu(vm: vm!)
+        }
+      }
+    }
+  }
+}
+
+struct USBMenu: View {
+  @ObservedObject var vm: VM
+
+  var body: some View {
+    if vm.usbMenuItems.isEmpty {
+      Text("Assign a device in the Virtual Machine Accessories menu bar item")
+    }
+
+    ForEach(vm.usbMenuItems) { item in
+      Toggle(item.title, isOn: Binding(get: { item.attached }, set: { _ in
+        Task { @MainActor in
+          do {
+            try await item.toggle()
+          } catch {
+            let alert = NSAlert()
+            alert.messageText = "Couldn't \(item.attached ? "detach" : "attach") \(item.title)"
+            alert.informativeText = error.localizedDescription
+
+            if !item.attached {
+              alert.informativeText = "If another VM is using the device, uncheck it in the USB menu of that VM or run \"tart usb detach\" first.\n\n" + alert.informativeText
+            }
+
+            // A modal alert would hold up the main actor, and with it "tart stop" and the VM
+            if let window = NSApplication.shared.mainWindow ?? NSApplication.shared.windows.first {
+              _ = await alert.beginSheetModal(for: window)
+            }
+          }
+        }
+      }))
     }
   }
 }

@@ -160,6 +160,83 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testUSBRequiresASupportedAndEntitledBuild() throws {
+    try withTemporaryTartHome {
+      _ = try makeStandaloneVM(named: "usb", diskContents: "")
+
+      // The test runner never has the entitlement, whichever macOS it runs on
+      XCTAssertThrowsError(try Run.parseAsRoot(["usb", "--usb=any"])) { error in
+        XCTAssertTrue(Run.message(for: error).contains("--usb requires macOS 27"), Run.message(for: error))
+      }
+    }
+  }
+
+  @available(macOS 14, *)
+  func testUSBAttachDetachesTheOtherVMsWithARelativeTartHome() async throws {
+    try await withTemporaryTartHome {
+      let target = try makeStandaloneVM(named: "target", diskContents: "")
+      let other = try makeStandaloneVM(named: "other", diskContents: "")
+      let home = try Config().tartHomeDir
+      let workingDirectory = FileManager.default.currentDirectoryPath
+      var requests: [String] = []
+
+      defer { FileManager.default.changeCurrentDirectoryPath(workingDirectory) }
+
+      let sockets = [
+        try await USBSocket(target.usbSocketURL) {
+          requests.append("target \($0)")
+          return USBReply(devices: [USBDeviceInfo(Device: "1050:0402", Name: "YubiKey", Attached: false)])
+        },
+        try await USBSocket(other.usbSocketURL) {
+          requests.append("other \($0)")
+          return USBReply(devices: [])
+        },
+      ]
+      let servers = sockets.map { socket in Task { try await socket.run() } }
+
+      defer { servers.forEach { $0.cancel() } }
+
+      FileManager.default.changeCurrentDirectoryPath(home.deletingLastPathComponent().path)
+      setenv("TART_HOME", home.lastPathComponent, 1)
+
+      try await USBAttach.parse(["target", "1050:0402"]).run()
+
+      XCTAssertEqual(requests, ["target list", "other detach 1050:0402", "target attach 1050:0402"])
+    }
+  }
+
+  #if arch(arm64)
+    func testUSBCannotBeUsedWithSuspendable() throws {
+      try withTemporaryTartHome {
+        _ = try makeStandaloneVM(named: "usb-suspendable", diskContents: "")
+
+        XCTAssertThrowsError(try Run.parseAsRoot(["usb-suspendable", "--usb=any", "--suspendable"])) { error in
+          XCTAssertTrue(Run.message(for: error).contains("--usb cannot be used with --suspendable"), Run.message(for: error))
+        }
+      }
+    }
+
+    func testVMWithAWindowGetsUSBWithoutTheOption() throws {
+      try withTemporaryTartHome {
+        let vmDir = try makeStandaloneVM(named: "usb-menu", diskContents: "")
+
+        func usbPassthrough(_ arguments: String..., supported: Bool = true) throws -> Bool {
+          try (Run.parseAsRoot(["usb-menu"] + arguments) as! Run).usbPassthrough(supported: supported)
+        }
+
+        XCTAssertTrue(try usbPassthrough())
+        XCTAssertTrue(try usbPassthrough("--vnc", "--graphics"))
+        XCTAssertFalse(try usbPassthrough(supported: false))
+        XCTAssertFalse(try usbPassthrough("--no-graphics"))
+        XCTAssertFalse(try usbPassthrough("--vnc"))
+        XCTAssertFalse(try usbPassthrough("--suspendable"))
+
+        XCTAssertTrue(FileManager.default.createFile(atPath: vmDir.stateURL.path, contents: Data()))
+        XCTAssertFalse(try usbPassthrough())
+      }
+    }
+  #endif
+
   func testPushRejectsInvalidConcurrencyAndChunkSize() {
     XCTAssertThrowsError(try Push.parse(["vm", "example.com/org/vm:latest", "--concurrency", "0"]))
     XCTAssertThrowsError(try Push.parse(["vm", "example.com/org/vm:latest", "--chunk-size=-1"]))
