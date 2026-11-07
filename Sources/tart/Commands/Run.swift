@@ -94,9 +94,9 @@ struct Run: AsyncParsableCommand {
   var noUSBAccessories: Bool = false
 
   @Option(help: ArgumentHelp("Let the VM use USB devices connected to the host, selected by hexadecimal vendor:product IDs or by \"any\" (e.g. --usb=05ac:12a8 or --usb=any)", discussion: """
-  Requires macOS 27 (or newer) and a Tart build signed with the com.apple.developer.accessory-access.usb entitlement. Such a build also gives a VM with a window a USB menu in the menu bar without this option, and attaches only the devices you check there.
+  Requires macOS 27 (or newer) and a Tart build signed with the com.apple.developer.accessory-access.usb entitlement. Such a build also gives a VM with a window a USB menu in the menu bar without this option. That VM attaches only the devices you check in the menu.
 
-  When a USB device is connected, macOS adds a Virtual Machine Accessories item to the menu bar. Choose "Use with" and the app that started Tart there, and the VM attaches the device. To move it between VMs started from the same app, use the USB menu in the menu bar or "tart usb". See https://tart.run/faq/#usb-passthrough for the limitations.
+  When a USB device is connected, macOS adds a Virtual Machine Accessories item to the menu bar. In that item, choose "Use with" followed by the app that started Tart, and the VM attaches the device. To move it between VMs started from the same app, use the USB menu or "tart usb". See https://tart.run/faq/#usb-passthrough for the limitations.
   """, valueName: "vendor:product"), transform: USBFilter.init(parseFrom:))
   var usb: [USBFilter] = []
 
@@ -426,7 +426,7 @@ struct Run: AsyncParsableCommand {
     #endif
 
     if !usb.isEmpty && !VM.isUSBPassthroughSupported {
-      throw ValidationError("--usb requires macOS 27 (or newer) and a Tart build made with the macOS 27 SDK and the com.apple.developer.accessory-access.usb entitlement, see https://tart.run/faq/#usb-passthrough")
+      throw ValidationError("--usb requires macOS 27 (or newer) and a Tart build made with the macOS 27 SDK and signed with the com.apple.developer.accessory-access.usb entitlement, see https://tart.run/faq/#usb-passthrough")
     }
 
     for disk in disk {
@@ -1006,7 +1006,7 @@ struct USBMenu: View {
               alert.informativeText = "If another VM is using the device, uncheck it in the USB menu of that VM or run \"tart usb detach\" first.\n\n" + alert.informativeText
             }
 
-            // A modal alert would hold up the main actor, and with it "tart stop" and the VM
+            // Unlike runModal(), a sheet leaves the main actor free for "tart stop" and the VM
             if let window = NSApplication.shared.mainWindow ?? NSApplication.shared.windows.first {
               _ = await alert.beginSheetModal(for: window)
             }

@@ -53,12 +53,13 @@ struct USBAttach: AsyncParsableCommand {
     let storage = try VMStorageLocal()
     let vmDir = try storage.open(name)
 
-    // Listed first, because a request changes the working directory and a relative TART_HOME with it
+    // List the VMs before any request, because a request changes the working directory
+    // that a relative TART_HOME resolves against
     let otherVMs = try storage.list().filter { $0.0 != name }
 
     var target = try await usbRequest(vmDir, "list")
 
-    // A device that just left a VM comes back a moment later, under a new ID
+    // A device that just left a VM comes back a moment later, under a new registry ID
     for _ in 1...20 where target.error == nil && !target.devices.contains(where: { filter.matches($0.Device) }) {
       try await Task.sleep(nanoseconds: 250_000_000)
       target = try await usbRequest(vmDir, "list")
@@ -66,13 +67,14 @@ struct USBAttach: AsyncParsableCommand {
 
     let devices = target.devices.map(\.Device).filter(filter.matches)
 
-    // Checked first because a device that this VM can't take would end up in no VM at all
+    // Fail before detaching from the other VMs, because a device that this VM can't take
+    // would end up in no VM at all
     if let error = target.error {
       throw RuntimeError.Generic("VM \"\(name)\" can't take \(device): \(error)")
     }
 
     guard !devices.isEmpty else {
-      throw RuntimeError.Generic("VM \"\(name)\" can't see \(device): check that it's connected and matches the --usb of the VM, if it has one, and that someone assigned it to the app of this VM in the Virtual Machine Accessories menu")
+      throw RuntimeError.Generic("VM \"\(name)\" can't see \(device): check that it's connected and matches the --usb filters of the VM, if it has any, and that someone assigned it to the app of this VM in the Virtual Machine Accessories menu bar item")
     }
 
     for device in devices {
@@ -81,7 +83,7 @@ struct USBAttach: AsyncParsableCommand {
         _ = try? await usbRequest(otherDir, "detach \(device)")
       }
 
-      // A device that left another VM reaches this one a moment later, under a new ID
+      // A device that left another VM reaches this one a moment later, under a new registry ID
       var reply = try await usbRequest(vmDir, "attach \(device)")
 
       for _ in 1...20 where reply.error != nil {
@@ -97,7 +99,7 @@ struct USBAttach: AsyncParsableCommand {
 }
 
 struct USBDetach: AsyncParsableCommand {
-  static var configuration = CommandConfiguration(commandName: "detach", abstract: "Detach a USB device from a running VM, until something attaches it again")
+  static var configuration = CommandConfiguration(commandName: "detach", abstract: "Detach a USB device from a running VM until the USB menu or \"tart usb attach\" attaches it again")
 
   @Argument(help: "VM name", completion: .custom(completeRunningMachines))
   var name: String

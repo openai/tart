@@ -182,7 +182,7 @@ extension VM {
     // USB menu or with `tart usb attach`. A registry ID wouldn't do, because it changes whenever
     // a device moves between VMs.
     //
-    // Identical devices share an entry, add the port if anyone needs to tell them apart
+    // Identical devices share an entry. Add the port if anyone needs to tell them apart.
     var onRequest: Swift.Set<String> = []
 
     init(vm: VM, attachesOnConnect: Bool) {
@@ -202,9 +202,9 @@ extension VM {
         return
       }
 
-      // Attaching needs a running VM and this event won't repeat, so wait out Control > Stop.
-      // The wait stays out of the event loop, or the events that replace this device would
-      // only arrive after it.
+      // Attaching needs a running VM and this event won't repeat, so wait for the VM to run again
+      // after Control > Stop. The wait has its own task, because in the for-await loop it would
+      // hold back the events that replace this device.
       Task {
         while vm.virtualMachine.state != .running && accessories[id] != nil {
           try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -287,7 +287,7 @@ extension VM {
       updateMenu()
     }
 
-    /// Runs a `tart usb` request: nothing but a device list, or `attach` or `detach` and a device.
+    /// Runs a `tart usb` request: `list`, or `attach` or `detach` followed by a device.
     func handle(_ request: String) async -> USBReply {
       do {
         let words = request.split(separator: " ").map(String.init)
@@ -311,7 +311,7 @@ extension VM {
 
         // Tells `tart usb attach` to leave the other VMs alone, as attaching here can't work
         if words.count != 2 && vm.virtualMachine.state != .running {
-          return USBReply(devices: deviceInfos(), error: "the VM is stopped, use Control > Start in its window")
+          return USBReply(devices: deviceInfos(), error: "the VM is stopped, bring its window to the front and use Control > Start in the menu bar")
         }
 
         return USBReply(devices: deviceInfos())
