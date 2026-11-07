@@ -120,8 +120,13 @@ struct USBDetach: AsyncParsableCommand {
 
 /// Sends a request to a running VM, see `USBSocket`.
 func usbRequest(_ vmDir: VMDirectory, _ request: String) async throws -> USBReply {
-  // Work around the Unix domain socket 104 byte limitation, like "tart exec" does
-  FileManager.default.changeCurrentDirectoryPath(vmDir.baseURL.path)
+  let noUSB = RuntimeError.Generic("VM \"\(vmDir.name)\" has no USB: it must be running with a window or --usb, on a Tart build that supports it, see https://tart.run/faq/#usb-passthrough")
+
+  // Work around the Unix domain socket 104 byte limitation, like "tart exec" does.
+  // Staying in the previous directory would send this request to the previous VM.
+  guard FileManager.default.changeCurrentDirectoryPath(vmDir.baseURL.path) else {
+    throw noUSB
+  }
 
   let channel: NIOAsyncChannel<ByteBuffer, ByteBuffer>
 
@@ -133,7 +138,7 @@ func usbRequest(_ vmDir: VMDirectory, _ request: String) async throws -> USBRepl
         }
       }
   } catch {
-    throw RuntimeError.Generic("VM \"\(vmDir.name)\" has no USB: it must be running with a window or --usb, on a Tart build that supports it, see https://tart.run/faq/#usb-passthrough")
+    throw noUSB
   }
 
   return try await channel.executeThenClose { inbound, outbound in

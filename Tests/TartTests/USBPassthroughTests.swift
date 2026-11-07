@@ -44,6 +44,14 @@ final class USBPassthroughTests: XCTestCase {
     XCTAssertEqual(reply.error, "attach 1050:0402")
     XCTAssertEqual(reply.devices.map(\.Device), ["1050:0402"])
     XCTAssertEqual(reply.devices.map(\.Attached), [true])
+
+    // The working directory still holds that socket, and this request must not reach it
+    do {
+      _ = try await usbRequest(VMDirectory(baseURL: directory.appendingPathComponent("deleted", isDirectory: true)), "list")
+      XCTFail("expected an error")
+    } catch {
+      XCTAssertTrue("\(error)".contains("has no USB"), "\(error)")
+    }
   }
 
   func testRequestToAVMWithoutUSBFails() async throws {

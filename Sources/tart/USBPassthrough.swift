@@ -243,11 +243,17 @@ extension VM {
     }
 
     func attach(_ accessory: AAUSBAccessory) async throws {
-      // The USB menu, `tart usb` and a new device can all get here at once
-      guard attaching.insert(accessory.registryID).inserted else {
+      // The USB menu, `tart usb` and a new device can all get here at once. Only one can attach,
+      // and the others wait for the outcome, then try for themselves if that attach failed.
+      while attaching.contains(accessory.registryID) {
+        try await Task.sleep(nanoseconds: 10_000_000)
+      }
+
+      guard attached[accessory.registryID] == nil else {
         return
       }
 
+      attaching.insert(accessory.registryID)
       defer { attaching.remove(accessory.registryID) }
 
       let configuration = VZUSBPassthroughDeviceConfiguration(device: accessory)
@@ -272,7 +278,7 @@ extension VM {
     func release(_ accessory: AAUSBAccessory) async throws {
       // An attach in flight would clear the mark below and keep the device, so let it finish
       while attaching.contains(accessory.registryID) {
-        try? await Task.sleep(nanoseconds: 10_000_000)
+        try await Task.sleep(nanoseconds: 10_000_000)
       }
 
       // The device comes back with a connect event as soon as it's detached, so mark it first
@@ -303,7 +309,7 @@ extension VM {
           for accessory in matching {
             if words[0] == "detach" {
               try await release(accessory)
-            } else if attached[accessory.registryID] == nil {
+            } else {
               try await attach(accessory)
             }
           }
