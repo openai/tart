@@ -40,7 +40,7 @@ struct USBList: AsyncParsableCommand {
 }
 
 struct USBAttach: AsyncParsableCommand {
-  static var configuration = CommandConfiguration(commandName: "attach", abstract: "Attach a USB device to a running VM, detaching it from any other VM")
+  static var configuration = CommandConfiguration(commandName: "attach", abstract: "Attach a USB device to a running VM, detaching it from the other VMs in the same TART_HOME")
 
   @Argument(help: "VM name", completion: .custom(completeRunningMachines))
   var name: String
@@ -83,10 +83,13 @@ struct USBAttach: AsyncParsableCommand {
         _ = try? await usbRequest(otherDir, "detach \(device)")
       }
 
-      // A device that left another VM reaches this one a moment later, under a new registry ID
+      // A device that left another VM reaches this one a moment later, under a new registry ID.
+      // Retry for a while instead of a number of times, because an attempt on a device that
+      // a VM still holds takes about 5 seconds to fail.
+      let deadline = Date().addingTimeInterval(10)
       var reply = try await usbRequest(vmDir, "attach \(device)")
 
-      for _ in 1...20 where reply.error != nil {
+      while reply.error != nil && Date() < deadline {
         try await Task.sleep(nanoseconds: 250_000_000)
         reply = try await usbRequest(vmDir, "attach \(device)")
       }

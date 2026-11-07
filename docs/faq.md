@@ -289,7 +289,7 @@ tart usb attach vm-b 05ac:12a8
 tart usb detach vm-b 05ac:12a8
 ```
 
-`tart usb attach` detaches the device from every other VM first. A device detached from a VM stays detached from that VM until the USB menu or `tart usb attach` attaches it again, even if "Use with" sends it back.
+`tart usb attach` first detaches the device from the other VMs in the same `TART_HOME`. If a VM from another `TART_HOME` holds the device, detach it there first, or the attach fails. A device detached from a VM stays detached from that VM until the USB menu or `tart usb attach` attaches it again, even if "Use with" sends it back.
 
 A VM without a window, such as one started with `--no-graphics`, has no USB menu, so it needs `--usb`. Only `tart usb` can move a device to or from it.
 
