@@ -1000,7 +1000,8 @@ struct USBMenu: View {
           } catch {
             let alert = NSAlert()
             alert.messageText = "Couldn't \(item.attached ? "detach" : "attach") \(item.title)"
-            alert.informativeText = error.localizedDescription
+            // The localizedDescription of a RuntimeError doesn't include its message
+            alert.informativeText = (error as? RuntimeError)?.description ?? error.localizedDescription
 
             if !item.attached {
               alert.informativeText = "If another VM is using the device, uncheck it in the USB menu of that VM or run \"tart usb detach\" first.\n\n" + alert.informativeText

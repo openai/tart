@@ -196,12 +196,23 @@ final class CommandBehaviorTests: XCTestCase {
 
       defer { servers.forEach { $0.cancel() } }
 
-      FileManager.default.changeCurrentDirectoryPath(home.deletingLastPathComponent().path)
       setenv("TART_HOME", home.lastPathComponent, 1)
 
-      try await USBAttach.parse(["target", "1050:0402"]).run()
+      // These all open the target VM, so none of them may detach the device from it
+      var names = ["target", "./target"]
 
-      XCTAssertEqual(requests, ["target list", "other detach 1050:0402", "target attach 1050:0402"])
+      if FileManager.default.fileExists(atPath: home.appendingPathComponent("vms/TARGET").path) {
+        names.append("TARGET")
+      }
+
+      for name in names {
+        requests = []
+        FileManager.default.changeCurrentDirectoryPath(home.deletingLastPathComponent().path)
+
+        try await USBAttach.parse([name, "1050:0402"]).run()
+
+        XCTAssertEqual(requests, ["target list", "other detach 1050:0402", "target attach 1050:0402"], name)
+      }
     }
   }
 

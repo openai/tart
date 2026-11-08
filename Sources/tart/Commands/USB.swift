@@ -54,8 +54,12 @@ struct USBAttach: AsyncParsableCommand {
     let vmDir = try storage.open(name)
 
     // List the VMs before any request, because a request changes the working directory
-    // that a relative TART_HOME resolves against
-    let otherVMs = try storage.list().filter { $0.0 != name }
+    // that a relative TART_HOME resolves against. Compare directories instead of names,
+    // because "./name", or the name with different capitalization, opens the same VM.
+    let targetID = try vmDir.baseURL.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier
+    let otherVMs = try storage.list().filter {
+      (try? $0.1.baseURL.resourceValues(forKeys: [.fileResourceIdentifierKey]))?.fileResourceIdentifier?.isEqual(targetID) != true
+    }
 
     var target = try await usbRequest(vmDir, "list")
 

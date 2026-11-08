@@ -66,6 +66,18 @@ struct USBReply: Codable {
   var error: String?
 }
 
+/// Splits a `tart usb` request into words: `list`, or `attach` or `detach` followed by a device.
+/// Throws on anything else, so that a mistyped request can't attach a device.
+func usbRequestWords(_ request: String) throws -> [String] {
+  let words = request.split(separator: " ").map(String.init)
+
+  guard words == ["list"] || (words.count == 2 && ["attach", "detach"].contains(words[0])) else {
+    throw RuntimeError.Generic("unsupported request \"\(request)\"")
+  }
+
+  return words
+}
+
 /// Answers `tart usb` for one running VM: one line in, one `USBReply` out, on each connection.
 @available(macOS 14, *)
 class USBSocket: ControlSocket {
@@ -177,6 +189,7 @@ extension VM {
     var accessories: [UInt64: AAUSBAccessory] = [:]
     var attached: [UInt64: VZUSBPassthroughDevice] = [:]
     var attaching: Swift.Set<UInt64> = []
+    var detaching: Swift.Set<UInt64> = []
 
     // Vendor and product IDs of the devices that this VM only attaches when asked to, from the
     // USB menu or with `tart usb attach`. A registry ID wouldn't do, because it changes whenever
@@ -249,6 +262,12 @@ extension VM {
         try await Task.sleep(nanoseconds: 10_000_000)
       }
 
+      // A detach in flight would undo this attach. The device then comes back under a new
+      // registry ID, so the caller has to try again with that one.
+      guard !detaching.contains(accessory.registryID) else {
+        throw RuntimeError.Generic("the device is being detached")
+      }
+
       guard attached[accessory.registryID] == nil else {
         return
       }
@@ -276,8 +295,9 @@ extension VM {
 
     /// Detaches a device, if this VM has it, and keeps it detached until someone asks for it.
     func release(_ accessory: AAUSBAccessory) async throws {
-      // An attach in flight would clear the mark below and keep the device, so let it finish
-      while attaching.contains(accessory.registryID) {
+      // An attach in flight would clear the mark below and keep the device, and a detach in
+      // flight would have this one detach the device a second time, so let them finish
+      while attaching.contains(accessory.registryID) || detaching.contains(accessory.registryID) {
         try await Task.sleep(nanoseconds: 10_000_000)
       }
 
@@ -288,15 +308,18 @@ extension VM {
         return
       }
 
+      detaching.insert(accessory.registryID)
+      defer { detaching.remove(accessory.registryID) }
+
       try await detach(device, accessory)
       attached.removeValue(forKey: accessory.registryID)
       updateMenu()
     }
 
-    /// Runs a `tart usb` request: `list`, or `attach` or `detach` followed by a device.
+    /// Runs a `tart usb` request, see `usbRequestWords`.
     func handle(_ request: String) async -> USBReply {
       do {
-        let words = request.split(separator: " ").map(String.init)
+        let words = try usbRequestWords(request)
 
         if words.count == 2 {
           let filter = try USBFilter(parseFrom: words[1])
@@ -322,7 +345,8 @@ extension VM {
 
         return USBReply(devices: deviceInfos())
       } catch {
-        return USBReply(devices: deviceInfos(), error: error.localizedDescription)
+        // The localizedDescription of a RuntimeError doesn't include its message
+        return USBReply(devices: deviceInfos(), error: (error as? RuntimeError)?.description ?? error.localizedDescription)
       }
     }
 

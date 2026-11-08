@@ -12,6 +12,16 @@ final class USBPassthroughTests: XCTestCase {
     }
   }
 
+  func testRequestParsing() throws {
+    XCTAssertEqual(try usbRequestWords("list"), ["list"])
+    XCTAssertEqual(try usbRequestWords("attach 1050:0402"), ["attach", "1050:0402"])
+    XCTAssertEqual(try usbRequestWords("detach any"), ["detach", "any"])
+
+    for invalid in ["", "unknown any", "status any", "list any", "attach", "detach", "attach any any"] {
+      XCTAssertThrowsError(try usbRequestWords(invalid), "\"\(invalid)\" should be rejected")
+    }
+  }
+
   func testFilterMatching() throws {
     XCTAssertTrue(try USBFilter(parseFrom: "any").matches("1050:0402"))
     XCTAssertTrue(try USBFilter(parseFrom: "1050:402").matches("1050:0402"))
