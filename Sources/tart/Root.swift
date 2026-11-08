@@ -30,6 +30,7 @@ struct Root: AsyncParsableCommand {
       Stop.self,
       Delete.self,
       FQN.self,
+      USB.self,
     ])
 
   // Note: main() is intentionally synchronous. Swift's asynchronous main() entry

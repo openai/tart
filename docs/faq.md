@@ -253,6 +253,58 @@ or newer. Existing standalone raw and ASIF images continue to work on older
 hosts. Keep published lineages shallow when possible: every additional parent
 overlay adds another ASIF file to validate and assemble at run time.
 
+## USB passthrough
+
+On macOS 27 or newer, a VM can use USB devices connected to the host. USB passthrough requires a Tart build with the `com.apple.developer.accessory-access.usb` entitlement, which released builds don't have yet (see the end of this section).
+
+A VM with a window gets a USB menu in the menu bar, and needs no option for it:
+
+```shell
+tart run tahoe-base
+```
+
+The menu lists the devices that macOS assigned to the app that started Tart. Check a device to attach it to the VM and uncheck it to detach it. Nothing attaches until you check it.
+
+A device belongs to the host until you assign it, so the menu starts out empty. When a USB device is connected, macOS adds a Virtual Machine Accessories item to the menu bar. Expand the device there and choose "Use with" followed by the name of an app.
+
+The Virtual Machine Accessories item lists apps, not VMs. A VM belongs to the app that macOS holds responsible for Tart: the terminal app when Tart starts from a shell, and Tart itself when it starts with `open -n`. The item calls an app it can't name "Unknown Application". macOS remembers the latest app chosen for each device, so the device shows up in the USB menu of the next `tart run` from that app.
+
+To attach devices without the USB menu, use `--usb`. Select devices by their hexadecimal vendor and product IDs, which `system_profiler SPUSBHostDataType` lists (leave out the `0x` prefix), or use `any` to match every USB device:
+
+```shell
+tart run --usb=05ac:12a8 tahoe-base
+```
+
+You can repeat the option. With `--usb`, the VM only sees matching devices. It attaches them as soon as macOS assigns them to its app, or when the VM starts if macOS assigned them earlier.
+
+The host can't use a device assigned to an app while any VM of that app with a USB menu or `--usb` is running, even if no VM has it attached. The device only goes back to the host after you choose "Use with this Mac" in the Virtual Machine Accessories item or stop all of those VMs.
+
+VMs of the same app can see the same device, but only one of them can hold it. A VM with `--usb` sees the devices that its filters match, and a VM with a USB menu and no `--usb` sees every device assigned to the app. The first VM that attaches a device keeps it, and the others leave it alone from then on, even after that VM stops.
+
+The USB menu attaches and detaches a device for the VM whose window is in front, and leaves the other VMs alone. To move a device between VMs of the same app, uncheck it in the USB menu of the VM that holds it, then check it in the menu of the other VM. From the command line, use `tart usb`, which also works for scripts and other automation:
+
+```shell
+tart usb list
+tart usb attach vm-b 05ac:12a8
+tart usb detach vm-b 05ac:12a8
+```
+
+`tart usb attach` first detaches the device from the other VMs in the same `TART_HOME`. If a VM from another `TART_HOME` holds the device, detach it there first, or the attach fails. A device detached from a VM stays detached from that VM until the USB menu or `tart usb attach` attaches it again, even if "Use with" sends it back.
+
+A VM without a window, such as one started with `--no-graphics`, has no USB menu, so it needs `--usb`. Only `tart usb` can move a device to or from it.
+
+`tart usb` can't choose the app, because macOS has no API for that. Only the Virtual Machine Accessories item can, so a person has to make that choice. Start VMs from the same app if a script or other automation needs to move a device between them.
+
+Some limitations apply:
+
+* `--usb` can't be used with `--suspendable`, and a VM started with `--suspendable` or resumed from a suspended state has no USB menu
+* AccessoryAccess only works in apps that appear in the Dock, so `--usb` shows a Dock icon even with `--no-graphics`
+* macOS disconnects the devices when the console user logs out or switches to another user, and gives them back when that user returns. A VM started with `--usb` then attaches them again. In any other VM, you have to check them again in the USB menu
+* Tart tells USB devices apart only by their vendor and product IDs, so it treats identical devices as one. `tart usb attach` detaches all of them from the other VMs in the same `TART_HOME`, even one that macOS assigned to another app, which the target VM can't take. In a VM with `--usb`, they also share whether they attach on their own when they reconnect: detaching one of them stops it for all of them, and attaching one starts it again for all of them
+* `--no-usb-accessories` is unrelated to this feature: it only removes the virtual USB keyboard and pointer
+
+Tart must be built with the macOS 27 SDK and signed with the `com.apple.developer.accessory-access.usb` entitlement, and macOS kills binaries that claim it without a provisioning profile that grants it. The provisioning profile in this repository doesn't grant it yet, so in released builds and in builds from `scripts/run-signed.sh`, `tart run --usb` exits with an error and VMs have no USB menu. To use USB passthrough now, you need an Apple Developer Program team with the Claim USB Accessory capability, your own bundle ID and provisioning profile, and a signing certificate.
+
 ## Disk resizing
 
 Disk resizing works on most cloud-ready Linux distributions out-of-the box (e.g. Ubuntu Cloud Images have the `cloud-initramfs-growroot` package installed that runs on boot) and on the rest of the distributions by running the `growpart` or `resize2fs` commands.
