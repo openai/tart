@@ -505,6 +505,32 @@ final class VMStorageOCITests: XCTestCase {
     }
   }
 
+  func testPruningCachedImageRemovesItsDanglingTag() throws {
+    try withTemporaryTartHome {
+      let storage = try VMStorageOCI()
+      let pruned = try createStandaloneRecord(digest: "sha256:" + String(repeating: "a", count: 64), in: storage)
+      let retained = try createStandaloneRecord(digest: "sha256:" + String(repeating: "b", count: 64), in: storage)
+      let prunedTag = RemoteName(host: "example.com", namespace: "org/image", reference: Reference(tag: "old"))
+      let retainedTag = RemoteName(host: "example.com", namespace: "org/image", reference: Reference(tag: "new"))
+      try storage.link(from: prunedTag, to: pruned.name)
+      try storage.link(from: retainedTag, to: retained.name)
+
+      let now = Date()
+      try pruned.vmDir.baseURL.updateAccessDate(now - 10 * 24 * 60 * 60)
+      try retained.vmDir.baseURL.updateAccessDate(now)
+
+      try Prune.pruneOlderThan(prunableStorages: [storage], olderThanDate: now - 24 * 60 * 60)
+
+      XCTAssertFalse(FileManager.default.fileExists(atPath: pruned.vmDir.baseURL.path))
+      // Inspect the link itself: fileExists(atPath:) would follow a dangling link and report false anyway.
+      XCTAssertThrowsError(try FileManager.default.attributesOfItem(
+        atPath: storage.baseURL.appendingRemoteName(prunedTag).path
+      ))
+      XCTAssertTrue(storage.exists(retainedTag))
+      XCTAssertTrue(storage.exists(retained.name))
+    }
+  }
+
   func testMalformedStackedOCIRecordDoesNotBlockPruning() throws {
     try withTemporaryTartHome {
       let contentStore = try ContentStore()
@@ -777,6 +803,19 @@ final class VMStorageOCITests: XCTestCase {
     try diskData.write(to: vmDir.diskURL)
 
     return vmDir
+  }
+
+  private func createStandaloneRecord(
+    digest: String,
+    in storage: VMStorageOCI
+  ) throws -> (name: RemoteName, vmDir: VMDirectory) {
+    let name = RemoteName(host: "example.com", namespace: "org/image", reference: Reference(digest: digest))
+    let record = try storage.create(name)
+    try config().save(toURL: record.configURL)
+    XCTAssertTrue(FileManager.default.createFile(atPath: record.nvramURL.path, contents: Data()))
+    try Data("disk".utf8).write(to: record.diskURL)
+
+    return (name, record)
   }
 
   private func createRecord(for manifest: OCIManifest, in storage: VMStorageOCI) throws -> VMDirectory {
