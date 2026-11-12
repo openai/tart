@@ -433,6 +433,12 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testAdditionalDiskWithoutPathIsRejected() throws {
+    for parseFrom in ["", ":", "ro", ":ro"] {
+      XCTAssertThrowsError(try AdditionalDisk(parseFrom: parseFrom), "--disk=\"\(parseFrom)\"")
+    }
+  }
+
   func testGarbageCollectionPreservesLockedTemporaryDirectory() throws {
     try withTemporaryTartHome {
       let temporaryVMDir = try VMDirectory.temporary()
