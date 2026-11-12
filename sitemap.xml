@@ -2,130 +2,110 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://tart.run/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/faq/</loc>
-         <lastmod>2026-05-12</lastmod>
-    </url>
-    <url>
-         <loc>https://tart.run/licensing/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/quick-start/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/blog/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/blog/2023/02/11/changing-tart-license/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/blog/2023/04/25/announcing-orchard-orchestration-for-managing-macos-virtual-machines-at-scale/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/blog/2023/04/28/ssh-over-grpc-or-how-orchard-simplifies-accessing-vms-in-private-networks/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/blog/2023/09/20/tart-200-and-community-updates/</loc>
-         <lastmod>2026-05-12</lastmod>
-    </url>
-    <url>
-         <loc>https://tart.run/blog/2023/10/06/tart-is-now-available-on-aws-marketplace/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/blog/2023/11/03/new-dashboard-with-insights-into-performance-of-cirrus-runners/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/blog/2024/06/20/jumping-through-the-hoops-ssh-jump-host-functionality-in-orchard/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/blog/2025/06/01/bridging-the-gaps-with-the-tart-guest-agent/</loc>
-         <lastmod>2026-05-12</lastmod>
-    </url>
-    <url>
-         <loc>https://tart.run/blog/2025/10/27/press-release-cirrus-labs-successfully-enforces-its-fair-source-license/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/integrations/buildkite/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/integrations/cirrus-cli/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/integrations/gitlab-runner/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/integrations/packer/</loc>
-         <lastmod>2026-05-12</lastmod>
-    </url>
-    <url>
-         <loc>https://tart.run/legal/privacy/</loc>
-         <lastmod>2026-05-12</lastmod>
-    </url>
-    <url>
-         <loc>https://tart.run/legal/terms/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/orchard/architecture-and-security/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/orchard/deploying-controller/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/orchard/deploying-workers/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/orchard/integration-guide/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/orchard/managing-cluster/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/orchard/quick-start/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/orchard/using-orchard-cli/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/blog/archive/2025/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/blog/archive/2024/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/blog/archive/2023/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/blog/category/announcement/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://tart.run/blog/category/orchard/</loc>
-         <lastmod>2026-05-12</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
 </urlset>
