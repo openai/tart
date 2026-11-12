@@ -294,6 +294,25 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testCloneRejectsEmptyDestinationName() async throws {
+    try await withTemporaryTartHome {
+      let source = try makeStandaloneVM(named: "source", diskContents: "source")
+      let other = try makeStandaloneVM(named: "other", diskContents: "other")
+
+      let command = try Clone.parseAsRoot(["--overwrite", "source", ""]) as! Clone
+
+      do {
+        try await command.run()
+        XCTFail("expected cloning to an empty name to be rejected")
+      } catch let error as RuntimeError {
+        XCTAssertEqual(error.description, "VM name cannot be empty")
+      }
+
+      XCTAssertEqual(try Data(contentsOf: source.diskURL), Data("source".utf8))
+      XCTAssertEqual(try Data(contentsOf: other.diskURL), Data("other".utf8))
+    }
+  }
+
   func testClonePreservesIncompleteDestination() async throws {
     try await withTemporaryTartHome {
       _ = try makeStandaloneVM(named: "source", diskContents: "source")

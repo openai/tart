@@ -34,6 +34,11 @@ class VMStorageLocal: PrunableStorage {
   }
 
   func move(_ name: String, from: VMDirectory) throws {
+    // An empty name resolves to the "vms" directory itself, so replacing it would delete every local VM
+    if name.isEmpty {
+      throw RuntimeError.Generic("VM name cannot be empty")
+    }
+
     _ = try FileManager.default.createDirectory(at: baseURL, withIntermediateDirectories: true)
     try replace(VMDirectory(baseURL: vmURL(name)), with: from)
   }
