@@ -62,17 +62,3 @@ task:
   sign_script: codesign --sign - --entitlements Resources/tart-dev.entitlements --force .build/$BUILD_ARCH-apple-macosx/debug/tart
   binary_artifacts:
     path: .build/$BUILD_ARCH-apple-macosx/debug/tart
-
-task:
-  name: Deploy Documentation
-  only_if: $CIRRUS_BRANCH == 'main'
-  container:
-    image: ghcr.io/squidfunk/mkdocs-material:latest
-    registry_config: ENCRYPTED[!cf1a0f25325aa75bad3ce6ebc890bc53eb0044c02efa70d8cefb83ba9766275a994b4831706c52630a0692b2fa9cfb9e!]
-  env:
-    DEPLOY_TOKEN: ENCRYPTED[!45ed45666558902ed1c2400add734ec063103bec31841847e8c8764802fca229bfa6d85c690e16ad159e047574b48793!]
-  deploy_script:
-    - git config --global user.name "Cirrus CI"
-    - git config --global user.name "hello@cirruslabs.org"
-    - git remote set-url origin https://$DEPLOY_TOKEN@github.com/cirruslabs/tart/
-    - mkdocs --verbose gh-deploy --force --remote-branch gh-pages
