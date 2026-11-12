@@ -84,8 +84,11 @@ struct IP: AsyncParsableCommand {
         }
       }
 
-      // wait a second
-      try await Task.sleep(nanoseconds: 1_000_000_000)
+      // wait a second, but don't sleep past the deadline
+      let remaining = waitUntil.timeIntervalSinceNow
+      if remaining > 0 {
+        try await Task.sleep(nanoseconds: UInt64(min(remaining, 1) * 1_000_000_000))
+      }
     } while Date.now < waitUntil
 
     return nil

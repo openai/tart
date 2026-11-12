@@ -166,6 +166,14 @@ final class CommandBehaviorTests: XCTestCase {
     XCTAssertNoThrow(try Push.parse(["vm", "example.com/org/vm:latest", "--chunk-size", "0"]))
   }
 
+  func testResolveIPWithoutWaitReturnsAfterOneAttempt() async throws {
+    let startedAt = Date()
+    let ip = try await IP.resolveIP(MACAddress(fromString: "00:00:00:00:00:00")!, resolutionStrategy: .dhcp)
+
+    XCTAssertNil(ip)
+    XCTAssertLessThan(Date().timeIntervalSince(startedAt), 1)
+  }
+
   func testCreateRejectsRemoteName() {
     XCTAssertThrowsError(try Create.parse(["org/vm", "--linux"]))
     XCTAssertNoThrow(try Create.parse(["vm", "--linux"]))
