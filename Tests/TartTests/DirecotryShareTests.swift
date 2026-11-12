@@ -52,6 +52,12 @@ final class DirectoryShareTests: XCTestCase {
     XCTAssertEqual(inverseRoShare.mountTag, "foo-bar")
   }
 
+  func testMissingPathIsRejected() throws {
+    for parseFrom in ["", ":", "ro", ":ro", "tag=foo-bar"] {
+      XCTAssertThrowsError(try DirectoryShare(parseFrom: parseFrom), "--dir=\"\(parseFrom)\"")
+    }
+  }
+
   func testURL() throws {
     let archiveWithoutNameOrOptions = try DirectoryShare(parseFrom: "https://example.com/archive.tar.gz")
     XCTAssertNil(archiveWithoutNameOrOptions.name)
