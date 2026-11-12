@@ -126,6 +126,40 @@ extension VMDirectory {
     }
   }
 
+  /// Copies this stacked VM to `destination` as a standalone VM, merging its
+  /// base, immutable overlays and writable overlay into a single disk.img.
+  ///
+  /// Returns the VM's PID lock, which the caller should hold until it has
+  /// replaced this VM with `destination`.
+  func flattenStacked(to destination: VMDirectory, contentStore: ContentStore? = nil) throws -> PIDLock {
+    // Resolve the stack before taking the config.json PID lock. Reading
+    // config.json after acquiring an fcntl lock would release that lock
+    // when the read file descriptor is closed.
+    let stack = try diskImageStack(contentStore: contentStore)
+
+    let lock = try lock()
+    guard try lock.trylock() else {
+      throw RuntimeError.VMIsRunning(name)
+    }
+
+    // A suspended VM's saved state can't be restored onto a standalone disk
+    guard !FileManager.default.fileExists(atPath: stateURL.path) else {
+      throw RuntimeError.VMConfigurationError("VM \"\(name)\" must be stopped before flattening its disk")
+    }
+
+    try stack.flatten(to: destination.diskURL)
+
+    // Copy the configuration last to pick up changes made while flattening,
+    // and take the lock again since copying config.json released it
+    try FileManager.default.copyItem(at: nvramURL, to: destination.nvramURL)
+    try FileManager.default.copyItem(at: configURL, to: destination.configURL)
+    guard try lock.trylock() else {
+      throw RuntimeError.VMIsRunning(name)
+    }
+
+    return lock
+  }
+
   private func diskImageURL(for group: TartDiskFileGroup, contentStore: ContentStore) throws -> URL {
     guard let contentDigest = group.contentDigest else {
       throw OCIManifestValidationError.invalidDiskMetadata("stacked disk files need a whole-file content digest")

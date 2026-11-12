@@ -278,7 +278,238 @@ import XCTest
       _ = try stack.makeAttachment()
     }
 
-    private func flatSource(diskFormat: DiskImageFormat = .raw) throws -> VMDirectory {
+    func testFlattenStackedFoldsOverlaysIntoStandaloneRawDisk() throws {
+      let contentStore = try temporaryContentStore()
+      let source = try flatSource(blockCount: 2048)
+      try write(block("base start"), at: 0, to: source.diskURL)
+      try write(block("base end"), at: 2047 * 512, to: source.diskURL)
+      let stacked = try temporaryVMDirectory()
+      try source.cloneAsStackedBase(to: stacked, generateMAC: false, contentStore: contentStore)
+      let stack = try stacked.diskImageStack(contentStore: contentStore)
+      try write(block("overlay start"), at: 0, through: stack)
+      try write(block("overlay middle"), at: 10 * 512, through: stack)
+
+      let flattened = try temporaryVMDirectory()
+      try stacked.flattenStacked(to: flattened, contentStore: contentStore)
+
+      XCTAssertTrue(flattened.isStandalone)
+      XCTAssertEqual(try VMConfig(fromURL: flattened.configURL).diskFormat, .raw)
+      var expected = Data(count: 2048 * 512)
+      expected.replaceSubrange(0..<512, with: block("overlay start"))
+      expected.replaceSubrange((10 * 512)..<(11 * 512), with: block("overlay middle"))
+      expected.replaceSubrange((2047 * 512)..<(2048 * 512), with: block("base end"))
+      XCTAssertEqual(try Data(contentsOf: flattened.diskURL), expected)
+      XCTAssertEqual(try read(stack), expected)
+    }
+
+    func testFlattenStackedSupportsASIFBase() throws {
+      let contentStore = try temporaryContentStore()
+      let source = try flatSource(diskFormat: .asif, blockCount: 2048)
+      try write(block("base"), at: 512, through: source.diskURL)
+      let stacked = try temporaryVMDirectory()
+      try source.cloneAsStackedBase(to: stacked, generateMAC: false, contentStore: contentStore)
+      let stack = try stacked.diskImageStack(contentStore: contentStore)
+      try write(block("overlay"), at: 1024, through: stack)
+
+      let flattened = try temporaryVMDirectory()
+      try stacked.flattenStacked(to: flattened, contentStore: contentStore)
+
+      let image = try DiskImage(opening: .open(url: flattened.diskURL, mode: .readOnly))
+      XCTAssertEqual(image.format, .asif)
+      XCTAssertNil(image.parentUUID)
+      XCTAssertEqual(image.blockCount, 2048)
+      let flattenedContents = try read(flattened.diskURL)
+      XCTAssertEqual(flattenedContents.subdata(in: 512..<1024), block("base"))
+      XCTAssertEqual(flattenedContents.subdata(in: 1024..<1536), block("overlay"))
+      XCTAssertEqual(flattenedContents, try read(stack))
+    }
+
+    func testFlattenStackedKeepsBaseBlocksBelowGrownOverlay() throws {
+      let contentStore = try temporaryContentStore()
+      let source = try flatSource(blockCount: 2048)
+      try write(block("base end"), at: 2047 * 512, to: source.diskURL)
+      let stacked = try temporaryVMDirectory()
+      try source.cloneAsStackedBase(to: stacked, generateMAC: false, contentStore: contentStore)
+      try stacked.resizeDisk(1, contentStore: contentStore)
+
+      let flattened = try temporaryVMDirectory()
+      try stacked.flattenStacked(to: flattened, contentStore: contentStore)
+
+      XCTAssertEqual(try flattened.diskURL.sizeBytes(), 1_000_000_000)
+      let disk = try FileHandle(forReadingFrom: flattened.diskURL)
+      defer { try? disk.close() }
+      try disk.seek(toOffset: 2047 * 512)
+      XCTAssertEqual(try disk.read(upToCount: 1024), block("base end") + Data(count: 512))
+    }
+
+    func testFlattenStackedRejectsOverlayOfAnotherBase() throws {
+      let contentStore = try temporaryContentStore()
+      // Only ASIF bases have a UUID that their overlays can be checked against
+      let stacked = try temporaryVMDirectory()
+      try flatSource(diskFormat: .asif, blockCount: 2048)
+        .cloneAsStackedBase(to: stacked, generateMAC: false, contentStore: contentStore)
+      let other = try temporaryVMDirectory()
+      try flatSource(diskFormat: .asif, blockCount: 2048)
+        .cloneAsStackedBase(to: other, generateMAC: false, contentStore: contentStore)
+      try FileManager.default.removeItem(at: stacked.overlayURL)
+      try FileManager.default.copyItem(at: other.overlayURL, to: stacked.overlayURL)
+
+      let flattened = try temporaryVMDirectory()
+      XCTAssertThrowsError(try stacked.flattenStacked(to: flattened, contentStore: contentStore))
+      XCTAssertFalse(FileManager.default.fileExists(atPath: flattened.diskURL.path))
+    }
+
+    func testFlattenStackedRejectsSuspendedVM() throws {
+      let contentStore = try temporaryContentStore()
+      let stacked = try temporaryVMDirectory()
+      try flatSource(blockCount: 2048).cloneAsStackedBase(to: stacked, generateMAC: false, contentStore: contentStore)
+      XCTAssertTrue(FileManager.default.createFile(atPath: stacked.stateURL.path, contents: Data()))
+
+      let flattened = try temporaryVMDirectory()
+      XCTAssertThrowsError(try stacked.flattenStacked(to: flattened, contentStore: contentStore))
+      XCTAssertFalse(FileManager.default.fileExists(atPath: flattened.diskURL.path))
+    }
+
+    func testFlattenCommandReplacesStackedVMWithStandaloneVM() async throws {
+      try await withTemporaryTartHome {
+        let source = try flatSource(blockCount: 2048)
+        try write(block("base"), at: 0, to: source.diskURL)
+        let localStorage = try VMStorageLocal()
+        let stacked = try localStorage.create("vm")
+        try source.cloneAsStackedBase(to: stacked, generateMAC: false)
+
+        try await Flatten.parse(["vm"]).run()
+
+        let flattened = try localStorage.open("vm")
+        XCTAssertTrue(flattened.isStandalone)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: flattened.manifestURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: flattened.overlayURL.path))
+        XCTAssertEqual(try Data(contentsOf: flattened.diskURL), try Data(contentsOf: source.diskURL))
+      }
+    }
+
+    func testFlattenAppliesOverlaysFromBottomToTop() throws {
+      let directory = try temporaryDirectory()
+      let baseURL = directory.appendingPathComponent("base.asif")
+      let lowerURL = directory.appendingPathComponent("lower.asif")
+      let upperURL = directory.appendingPathComponent("upper.asif")
+
+      _ = try DiskImage(creating: .asif(url: baseURL, blockCount: 2048, blockSize: .bytes512))
+      _ = try DiskImage(opening: .open(url: baseURL, mode: .readOnly))
+        .appending(.asifLayer(url: lowerURL, type: .overlay))
+      try write(block("lower"), at: 0, through: baseURL, overlays: [lowerURL])
+      try write(block("lower"), at: 512, through: baseURL, overlays: [lowerURL])
+
+      _ = try DiskImage(opening: .open(url: baseURL, mode: .readOnly))
+        .appending(DiskImage(opening: .open(url: lowerURL, mode: .readOnly)))
+        .appending(.asifLayer(url: upperURL, type: .overlay))
+      try write(block("upper"), at: 0, through: baseURL, overlays: [lowerURL, upperURL])
+
+      let stack = DiskImageStack(
+        baseURL: baseURL,
+        baseFormat: .asif,
+        immutableOverlayURLs: [lowerURL],
+        writableOverlayURL: upperURL,
+        blockSize: 512,
+        blockCount: 2048
+      )
+      let flattenedURL = directory.appendingPathComponent("flattened.asif")
+      try stack.flatten(to: flattenedURL)
+
+      let flattenedContents = try read(flattenedURL)
+      XCTAssertEqual(flattenedContents.subdata(in: 0..<512), block("upper"))
+      XCTAssertEqual(flattenedContents.subdata(in: 512..<1024), block("lower"))
+      XCTAssertEqual(flattenedContents, try read(stack))
+    }
+
+    private func block(_ text: String) -> Data {
+      var data = Data(text.utf8)
+      data.append(Data(count: 512 - data.count))
+
+      return data
+    }
+
+    private func write(_ data: Data, at offset: UInt64, to url: URL) throws {
+      let file = try FileHandle(forWritingTo: url)
+      defer { try? file.close() }
+      try file.seek(toOffset: offset)
+      try file.write(contentsOf: data)
+    }
+
+    /// Writes to an attached disk image, so that writes to a stack land in its writable overlay
+    private func write(_ data: Data, at offset: UInt64, through url: URL, overlays: [URL] = []) throws {
+      let device = try attach(url, overlays: overlays, readOnly: false)
+      defer { detach(device) }
+
+      try write(data, at: offset, to: URL(fileURLWithPath: "/dev/r\(device)"))
+    }
+
+    private func write(_ data: Data, at offset: UInt64, through stack: DiskImageStack) throws {
+      try write(data, at: offset, through: stack.baseURL, overlays: stack.immutableOverlayURLs + [stack.writableOverlayURL])
+    }
+
+    /// Reads the blocks of a disk image the way a guest sees them
+    private func read(_ url: URL, overlays: [URL] = []) throws -> Data {
+      let device = try attach(url, overlays: overlays, readOnly: true)
+      defer { detach(device) }
+
+      let disk = try FileHandle(forReadingFrom: URL(fileURLWithPath: "/dev/r\(device)"))
+      defer { try? disk.close() }
+
+      return try disk.readToEnd() ?? Data()
+    }
+
+    private func read(_ stack: DiskImageStack) throws -> Data {
+      try read(stack.baseURL, overlays: stack.immutableOverlayURLs + [stack.writableOverlayURL])
+    }
+
+    private func attach(_ url: URL, overlays: [URL], readOnly: Bool) throws -> String {
+      var arguments = ["image", "attach", "--noMount"]
+      if readOnly {
+        arguments.append("--readOnly")
+      }
+      for overlayURL in overlays {
+        arguments += ["--shadow", overlayURL.path]
+      }
+      arguments.append(url.path)
+
+      let output = try diskutil(arguments)
+      guard let device = output.split(whereSeparator: \.isWhitespace).first(where: { $0.hasPrefix("/dev/disk") }) else {
+        throw RuntimeError.Generic("diskutil image attach didn't report a device: \(output)")
+      }
+
+      return String(device.dropFirst("/dev/".count))
+    }
+
+    private func detach(_ device: String) {
+      do {
+        _ = try diskutil(["eject", device])
+      } catch {
+        XCTFail("failed to detach \(device): \(error)")
+      }
+    }
+
+    private func diskutil(_ arguments: [String]) throws -> String {
+      let stdout = Pipe()
+      let stderr = Pipe()
+      let process = Process()
+      process.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
+      process.arguments = arguments
+      process.standardOutput = stdout
+      process.standardError = stderr
+      try process.run()
+      let output = String(decoding: stdout.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+      let errorOutput = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+      process.waitUntilExit()
+
+      guard process.terminationStatus == 0 else {
+        throw RuntimeError.Generic("diskutil \(arguments.joined(separator: " ")) failed: \(errorOutput)\(output)")
+      }
+
+      return output
+    }
+
+    private func flatSource(diskFormat: DiskImageFormat = .raw, blockCount: Int = 8) throws -> VMDirectory {
       let vmDir = try temporaryVMDirectory()
       let config = VMConfig(
         platform: Linux(),
@@ -290,9 +521,9 @@ import XCTest
       XCTAssertTrue(FileManager.default.createFile(atPath: vmDir.nvramURL.path, contents: Data()))
       switch diskFormat {
       case .raw:
-        _ = try DiskImage(creating: .raw(url: vmDir.diskURL, blockCount: 8))
+        _ = try DiskImage(creating: .raw(url: vmDir.diskURL, blockCount: blockCount))
       case .asif:
-        _ = try DiskImage(creating: .asif(url: vmDir.diskURL, blockCount: 8, blockSize: .bytes512))
+        _ = try DiskImage(creating: .asif(url: vmDir.diskURL, blockCount: blockCount, blockSize: .bytes512))
       }
 
       let diskChunk = OCIManifestLayer(
@@ -340,6 +571,21 @@ import XCTest
       }
 
       try body()
+    }
+
+    private func withTemporaryTartHome(_ body: () async throws -> Void) async throws {
+      let home = try temporaryDirectory()
+      let previousHome = ProcessInfo.processInfo.environment["TART_HOME"]
+      setenv("TART_HOME", home.path, 1)
+      defer {
+        if let previousHome {
+          setenv("TART_HOME", previousHome, 1)
+        } else {
+          unsetenv("TART_HOME")
+        }
+      }
+
+      try await body()
     }
 
     private func temporaryVMDirectory() throws -> VMDirectory {

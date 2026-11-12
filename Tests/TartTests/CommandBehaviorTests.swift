@@ -346,7 +346,7 @@ final class CommandBehaviorTests: XCTestCase {
         try await command.run()
         XCTFail("expected stacked disk replacement to be rejected")
       } catch let error as ValidationError {
-        XCTAssertEqual(error.message, "--disk is not supported for VMs with a stacked disk")
+        XCTAssertEqual(error.message, "--disk is not supported for VMs with a stacked disk, flatten it first with \"tart flatten stacked\"")
       }
 
       XCTAssertEqual(try VMConfig(fromURL: vmDir.configURL).cpuCount, originalConfig.cpuCount)

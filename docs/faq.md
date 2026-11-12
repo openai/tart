@@ -252,6 +252,8 @@ import, and export require a Tart build with DiskImageKit support and macOS 27
 or newer. Existing standalone raw and ASIF images continue to work on older
 hosts. Keep published lineages shallow when possible: every additional parent
 overlay adds another ASIF file to validate and assemble at run time.
+`tart flatten` turns a stacked VM back into a standalone one, which can then be
+pushed as the base of a new lineage.
 
 ## Disk resizing
 
