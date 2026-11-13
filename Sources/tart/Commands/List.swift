@@ -35,6 +35,15 @@ struct List: AsyncParsableCommand {
   }
 
   func run() async throws {
+    if quiet {
+      // Names come straight from storage enumeration: probing each VM's disk
+      // ("diskutil image info" for ASIF disks) is slow and only needed for the full listing.
+      for name in try names() {
+        print(name)
+      }
+      return
+    }
+
     var infos: [VMInfo] = []
 
     if source == nil || source == "local" {
@@ -82,13 +91,21 @@ struct List: AsyncParsableCommand {
       })
     }
 
-    if (quiet) {
-      for info in infos {
-        print(info.Name)
-      }
-    } else {
-      print(format.renderList(infos))
+    print(format.renderList(infos))
+  }
+
+  private func names() throws -> [String] {
+    var names: [String] = []
+
+    if source == nil || source == "local" {
+      names += try VMStorageLocal().list().map { name, _ in name }.sorted()
     }
+
+    if source == nil || source == "oci" {
+      names += try VMStorageOCI().list().map { name, _, _ in name }.sorted()
+    }
+
+    return names
   }
 
   private func sortedInfos(_ infos: [VMInfo]) -> [VMInfo] {
