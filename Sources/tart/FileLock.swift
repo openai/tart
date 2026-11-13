@@ -13,6 +13,11 @@ class FileLock {
   init(lockURL: URL) throws {
     url = lockURL
     fd = open(lockURL.path, 0)
+    if fd == -1 {
+      let details = Errno(rawValue: CInt(errno))
+
+      throw FileLockError.Failed("failed to open lock file \(url): \(details)")
+    }
   }
 
   deinit {

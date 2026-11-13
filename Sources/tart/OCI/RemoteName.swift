@@ -92,7 +92,7 @@ struct RemoteName: Comparable, Hashable, CustomStringConvertible {
 
   init(_ name: String) throws {
     let errorCollector = ErrorCollector()
-    let inputStream = ANTLRInputStream(Array(name.unicodeScalars), name.count)
+    let inputStream = ANTLRInputStream(name)
     let lexer = ReferenceLexer(inputStream)
     lexer.removeErrorListeners()
     lexer.addErrorListener(errorCollector)

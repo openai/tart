@@ -1118,7 +1118,12 @@ struct AdditionalDisk {
       let lock = try FileLock(lockURL: clonedDiskURL)
       try lock.lock()
 
-      let diskImageAttachment = try VZDiskImageStorageDeviceAttachment(url: clonedDiskURL, readOnly: diskReadOnly)
+      let diskImageAttachment = try VZDiskImageStorageDeviceAttachment(
+        url: clonedDiskURL,
+        readOnly: diskReadOnly,
+        cachingMode: try VZDiskImageCachingMode(cachingModeRaw) ?? .automatic,
+        synchronizationMode: try VZDiskImageSynchronizationMode(syncModeRaw)
+      )
 
       return AdditionalDisk(configuration: VZVirtioBlockDeviceConfiguration(attachment: diskImageAttachment), temporaryDiskLock: lock)
     }

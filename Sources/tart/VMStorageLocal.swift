@@ -41,6 +41,14 @@ class VMStorageLocal: PrunableStorage {
   func rename(_ name: String, _ newName: String) throws {
     let source = VMDirectory(baseURL: vmURL(name))
     let destination = VMDirectory(baseURL: vmURL(newName))
+
+    // A running VM keeps using its old directory, e.g. to save its state on suspend
+    let sourceLock = try source.lock()
+    if try !sourceLock.trylock() {
+      throw RuntimeError.VMIsRunning(name)
+    }
+    defer { withExtendedLifetime(sourceLock) {} }
+
     try replace(destination, with: source)
   }
 
