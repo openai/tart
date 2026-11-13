@@ -261,6 +261,23 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testCreateRejectsExistingDestination() async throws {
+    try await withTemporaryTartHome {
+      let destination = try makeStandaloneVM(named: "destination", diskContents: "existing")
+
+      let command = try Create.parseAsRoot(["--linux", "destination"]) as! Create
+
+      do {
+        try await command.run()
+        XCTFail("expected creating over an existing VM to be rejected")
+      } catch let error as ValidationError {
+        XCTAssertEqual(error.message, "VM \"destination\" already exists, use --overwrite to replace it")
+      }
+
+      XCTAssertEqual(try Data(contentsOf: destination.diskURL), Data("existing".utf8))
+    }
+  }
+
   func testRenameRejectsRunningVM() async throws {
     try await withTemporaryTartHome {
       let vmDir = try makeStandaloneVM(named: "vm", diskContents: "vm")
