@@ -56,6 +56,40 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testQuietListDoesNotProbeDisks() async throws {
+    try await withTemporaryTartHome {
+      let markerURL = try temporaryDirectory().appendingPathComponent("diskutil-called")
+      let previousPath = try installUnavailableDiskutil(beforeFailure: "/usr/bin/touch \"\(markerURL.path)\"")
+      defer { restoreEnvironment("PATH", to: previousPath) }
+
+      let digest = "sha256:" + String(repeating: "a", count: 64)
+      for name in ["b-asif", "a-asif"] {
+        let remoteName = try RemoteName("example.com/org/\(name)@\(digest)")
+        for vmDir in [try VMStorageLocal().create(name), try VMStorageOCI().create(remoteName)] {
+          var vmConfig = config()
+          vmConfig.diskFormat = .asif
+          try vmConfig.save(toURL: vmDir.configURL)
+          XCTAssertTrue(FileManager.default.createFile(atPath: vmDir.nvramURL.path, contents: Data()))
+          XCTAssertTrue(FileManager.default.createFile(atPath: vmDir.diskURL.path, contents: Data()))
+        }
+      }
+
+      let localNames = ["a-asif", "b-asif"]
+      let ociNames = ["example.com/org/a-asif@\(digest)", "example.com/org/b-asif@\(digest)"]
+      let cases: [([String], [String])] = [
+        ([], localNames + ociNames),
+        (["--source", "local"], localNames),
+        (["--source", "oci"], ociNames),
+      ]
+      for (sourceArguments, expectedNames) in cases {
+        let output = try await commandOutput(List.self, sourceArguments + ["--quiet"])
+        XCTAssertEqual(output.split(separator: "\n").map(String.init), expectedNames)
+      }
+
+      XCTAssertFalse(FileManager.default.fileExists(atPath: markerURL.path))
+    }
+  }
+
   func testListSkipsLocalVMsDeletedDuringMetadataLookup() async throws {
     try await assertListSurvivesDeletion(sourceArguments: ["--source", "local"])
   }
@@ -454,7 +488,8 @@ final class CommandBehaviorTests: XCTestCase {
 
   private func assertListSurvivesDeletion(sourceArguments: [String]) async throws {
     let digest = "sha256:" + String(repeating: "a", count: 64)
-    for outputArguments in [["--format", "json"], [], ["--quiet"]] {
+    // "--quiet" is not covered here: it never probes disks, so there is no lookup to race with.
+    for outputArguments in [["--format", "json"], []] {
       try await withTemporaryTartHome {
         // diskutil runs after enumeration, making the deletion race deterministic.
         let previousPath = try installUnavailableDiskutil(beforeFailure: "/bin/rm -rf \"${4%/*}\"")
@@ -480,8 +515,6 @@ final class CommandBehaviorTests: XCTestCase {
         if outputArguments == ["--format", "json"] {
           let rows = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [[String: Any]])
           XCTAssertEqual(rows.compactMap { $0["Name"] as? String }, expectedNames)
-        } else if outputArguments == ["--quiet"] {
-          XCTAssertEqual(output.split(separator: "\n").map(String.init), expectedNames)
         } else {
           for name in expectedNames {
             XCTAssertTrue(output.contains(name))
