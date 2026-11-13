@@ -11,6 +11,10 @@ fileprivate let permissions = FilePermissions(rawValue: 0o644)
 // [2]: https://developer.apple.com/documentation/compression/algorithm/lzfse
 extension VMDirectory {
   func exportToArchive(path: String) throws {
+    if try running() {
+      throw RuntimeError.ExportFailed("VM \"\(name)\" must be stopped before export")
+    }
+
     let temporaryArchive = try stackedArchiveDirectoryIfNeeded()
     let archiveSourceURL = temporaryArchive?.vmDirectory.baseURL ?? baseURL
 

@@ -324,6 +324,39 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testExportRejectsRunningVM() async throws {
+    try await withTemporaryTartHome {
+      let vmDir = try makeStandaloneVM(named: "vm", diskContents: "vm")
+      let archiveURL = try temporaryDirectory().appendingPathComponent("vm.tvm")
+
+      // Hold the VM's PID lock from another process, like "tart run" does
+      let holder = Process()
+      holder.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+      holder.arguments = [
+        "-MFcntl", "-e",
+        #"open(my $f, "+<", shift) or die; fcntl($f, F_SETLK, pack("qqiss", 0, 0, 0, F_WRLCK, SEEK_SET)) or die; $| = 1; print "locked\n"; sleep"#,
+        vmDir.configURL.path,
+      ]
+      let stdout = Pipe()
+      holder.standardOutput = stdout
+      try holder.run()
+      defer {
+        holder.terminate()
+        holder.waitUntilExit()
+      }
+      _ = stdout.fileHandleForReading.availableData
+
+      do {
+        try await Export.parse(["vm", archiveURL.path]).run()
+        XCTFail("expected exporting a running VM to be rejected")
+      } catch let error as RuntimeError {
+        XCTAssertEqual(error.description, "VM export failed: VM \"vm\" must be stopped before export")
+      }
+
+      XCTAssertFalse(FileManager.default.fileExists(atPath: archiveURL.path))
+    }
+  }
+
   func testSetDiskRejectsStackedVMBeforeSavingConfig() async throws {
     try await withTemporaryTartHome {
       let vmDir = try VMStorageLocal().create("stacked")
