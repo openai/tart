@@ -294,18 +294,22 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
-  func testCloneRejectsEmptyDestinationName() async throws {
-    try await withTemporaryTartHome {
+  func testRejectsEmptyVMName() throws {
+    try withTemporaryTartHome {
       let source = try makeStandaloneVM(named: "source", diskContents: "source")
       let other = try makeStandaloneVM(named: "other", diskContents: "other")
 
-      let command = try Clone.parseAsRoot(["--overwrite", "source", ""]) as! Clone
+      XCTAssertThrowsError(try Create.parse(["--linux", ""]))
+      XCTAssertThrowsError(try Clone.parse(["--overwrite", "source", ""]))
+      XCTAssertThrowsError(try Import.parse(["--overwrite", "source.tvm", ""]))
+      XCTAssertThrowsError(try Rename.parse(["source", ""]))
 
-      do {
-        try await command.run()
-        XCTFail("expected cloning to an empty name to be rejected")
-      } catch let error as RuntimeError {
-        XCTAssertEqual(error.description, "VM name cannot be empty")
+      let storage = try VMStorageLocal()
+      XCTAssertThrowsError(try storage.move("", from: VMDirectory.temporary())) { error in
+        XCTAssertEqual((error as? RuntimeError)?.description, "VM name cannot be empty")
+      }
+      XCTAssertThrowsError(try storage.rename("source", "")) { error in
+        XCTAssertEqual((error as? RuntimeError)?.description, "VM name cannot be empty")
       }
 
       XCTAssertEqual(try Data(contentsOf: source.diskURL), Data("source".utf8))
