@@ -35,12 +35,11 @@ class VMStorageLocal: PrunableStorage {
 
   func move(_ name: String, from: VMDirectory) throws {
     _ = try FileManager.default.createDirectory(at: baseURL, withIntermediateDirectories: true)
-    try replace(VMDirectory(baseURL: vmURL(name)), with: from)
+    try replace(name, with: from)
   }
 
   func rename(_ name: String, _ newName: String) throws {
     let source = VMDirectory(baseURL: vmURL(name))
-    let destination = VMDirectory(baseURL: vmURL(newName))
 
     // A running VM keeps using its old directory, e.g. to save its state on suspend
     let sourceLock = try source.lock()
@@ -49,12 +48,19 @@ class VMStorageLocal: PrunableStorage {
     }
     defer { withExtendedLifetime(sourceLock) {} }
 
-    try replace(destination, with: source)
+    try replace(newName, with: source)
   }
 
   /// References in a manifest must not disappear while content GC is deciding
   /// whether their immutable disk files are still in use.
-  private func replace(_ destination: VMDirectory, with source: VMDirectory) throws {
+  private func replace(_ name: String, with source: VMDirectory) throws {
+    // An empty name resolves to the "vms" directory itself, so replacing it would delete every local VM
+    if name.isEmpty {
+      throw RuntimeError.Generic("VM name cannot be empty")
+    }
+
+    let destination = VMDirectory(baseURL: vmURL(name))
+
     // Replacing a running VM's directory unlinks its locked config and disks,
     // leaving a live VM that list and stop can no longer find by name.
     let destinationLock = FileManager.default.fileExists(atPath: destination.configURL.path)
