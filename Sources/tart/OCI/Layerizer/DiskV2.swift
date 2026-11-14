@@ -248,6 +248,9 @@ class DiskV2: Disk {
 
         globalDiskWritingOffset += uncompressedLayerSize
       }
+
+      // Rethrow the errors of the last tasks, otherwise the group discards them
+      try await group.waitForAll()
     }
   }
 
