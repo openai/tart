@@ -171,9 +171,10 @@ class DiskV2: Disk {
           // Open the disk file for writing
           let disk = try FileHandle(forWritingTo: diskURL)
 
-          // Also open the disk file for reading and verifying
-          // its contents in case the local layer cache is used
-          let rdisk: FileHandle? = if deduplicate && localLayerCache != nil {
+          // Also open the disk file for reading and verifying its contents
+          // in case it may already hold other data: a resumed pull or a disk
+          // cloned from the local layer cache
+          let rdisk: FileHandle? = if pullResumed || (deduplicate && localLayerCache != nil) {
             try FileHandle(forReadingFrom: diskURL)
           } else {
             nil
@@ -184,7 +185,7 @@ class DiskV2: Disk {
           if let localLayerCache = localLayerCache,
              let localLayerInfo = localLayerCache.findInfo(digest: diskLayer.digest, offsetHint: diskWritingOffset),
              localLayerInfo.uncompressedContentDigest == uncompressedLayerContentDigest {
-            if deduplicate && localLayerInfo.range.lowerBound == diskWritingOffset {
+            if deduplicate && !pullResumed && localLayerInfo.range.lowerBound == diskWritingOffset {
               // Do nothing, because the data is already on the disk that we've inherited from
             } else {
               // Fulfil the layer contents from the local blob cache
@@ -251,25 +252,28 @@ class DiskV2: Disk {
     }
   }
 
+  // Returns false when the file system can't punch holes (e.g. HFS+, exFAT
+  // or some network shares), in which case the caller writes the zeros instead
+  private static func punchHole(_ disk: FileHandle, _ offset: UInt64, _ length: Int) -> Bool {
+    var arg = fpunchhole_t(fp_flags: 0, reserved: 0, fp_offset: off_t(offset), fp_length: off_t(length))
+
+    return fcntl(disk.fileDescriptor, F_PUNCHHOLE, &arg) != -1
+  }
+
   private static func zeroSkippingWrite(_ disk: FileHandle, _ rdisk: FileHandle?, _ fsBlockSize: UInt64, _ offset: UInt64, _ data: Data) throws -> UInt64 {
     var offset = offset
 
     for chunk in data.chunks(ofCount: holeGranularityBytes) {
-      // If the local layer cache is used, only write chunks that differ
-      // since the base disk can contain anything at any position
+      // If the disk may already hold other data (a resumed pull or a disk cloned
+      // from the local layer cache), only write chunks that differ since the disk
+      // can contain anything at any position
       if let rdisk = rdisk {
         // F_PUNCHHOLE requires the holes to be aligned to file system block boundaries
         let isHoleAligned = (offset % fsBlockSize) == 0 && (UInt64(chunk.count) % fsBlockSize) == 0
 
-        if isHoleAligned && chunk == zeroChunk {
-          var arg = fpunchhole_t(fp_flags: 0, reserved: 0, fp_offset: off_t(offset), fp_length: off_t(chunk.count))
+        let punched = (isHoleAligned && chunk == zeroChunk) && punchHole(disk, offset, chunk.count)
 
-          if fcntl(disk.fileDescriptor, F_PUNCHHOLE, &arg) == -1 {
-            let details = Errno(rawValue: errno)
-
-            throw RuntimeError.PullFailed("failed to punch hole: \(details)")
-          }
-        } else {
+        if !punched {
           try rdisk.seek(toOffset: offset)
           let actualContentsOnDisk = try rdisk.read(upToCount: chunk.count)
 
