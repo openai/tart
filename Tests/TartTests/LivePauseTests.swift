@@ -20,14 +20,54 @@ final class LivePauseTests: XCTestCase {
     XCTAssertEqual(try directory.state(), .Suspended)
   }
 
+  @MainActor
   func testPauseIsRejectedUntilInitializationCompletes() {
-    var lifecycle = LivePauseLifecycle()
+    let lifecycle = LivePauseLifecycle()
     XCTAssertFalse(lifecycle.beginTransition())
     lifecycle.initialized = true
     XCTAssertTrue(lifecycle.beginTransition())
     XCTAssertFalse(lifecycle.beginTransition())
     lifecycle.endTransition()
     XCTAssertTrue(lifecycle.beginTransition())
+  }
+
+  @MainActor
+  func testSuspendWaitsForInitializationAndCoalescesRequests() {
+    let lifecycle = LivePauseLifecycle()
+    var saves = 0
+    lifecycle.requestSuspend { saves += 1 }
+    lifecycle.requestSuspend { saves += 100 }
+    XCTAssertEqual(saves, 0)
+    lifecycle.initialized = true
+    XCTAssertEqual(saves, 1)
+    XCTAssertFalse(lifecycle.beginTransition())
+    lifecycle.endTransition()
+    lifecycle.requestSuspend { saves += 100 }
+    XCTAssertEqual(saves, 1)
+  }
+
+  @MainActor
+  func testSuspendWaitsForActiveTransitionAndTakesPriority() {
+    let lifecycle = LivePauseLifecycle()
+    lifecycle.initialized = true
+    XCTAssertTrue(lifecycle.beginTransition())
+    var saves = 0
+    lifecycle.requestSuspend { saves += 1 }
+    XCTAssertEqual(saves, 0)
+    lifecycle.endTransition()
+    XCTAssertEqual(saves, 1)
+    XCTAssertFalse(lifecycle.beginTransition())
+    lifecycle.endTransition()
+    XCTAssertEqual(saves, 1)
+  }
+
+  @MainActor
+  func testSuspendStartsImmediatelyWhenReady() {
+    let lifecycle = LivePauseLifecycle()
+    lifecycle.initialized = true
+    var saves = 0
+    lifecycle.requestSuspend { saves += 1 }
+    XCTAssertEqual(saves, 1)
   }
 
   @MainActor

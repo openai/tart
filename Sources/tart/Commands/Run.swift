@@ -549,7 +549,7 @@ struct Run: AsyncParsableCommand {
     // now VM state will return "running" so we can unlock
     try storageLock.unlock()
 
-    var lifecycle = LivePauseLifecycle()
+    let lifecycle = LivePauseLifecycle()
     let task = Task {
       do {
         var resume = false
@@ -701,39 +701,39 @@ struct Run: AsyncParsableCommand {
     let sigusr1Src = DispatchSource.makeSignalSource(signal: SIGUSR1)
     sigusr1Src.setEventHandler {
       Task { @MainActor in
-        guard lifecycle.beginTransition() else {
-          fputs("VM initialization or another state transition is still in progress; retry\n", stderr)
-          return
-        }
-        defer { lifecycle.endTransition() }
-        do {
-          #if arch(arm64)
-            if #available(macOS 14, *) {
-              try vm!.configuration.validateSaveRestoreSupport()
+        lifecycle.requestSuspend {
+          Task { @MainActor in
+            defer { lifecycle.endTransition() }
+            do {
+              #if arch(arm64)
+                if #available(macOS 14, *) {
+                  try vm!.configuration.validateSaveRestoreSupport()
 
-              print("preparing VM to take a snapshot...")
-              try await pauseForStateSave(state: vm!.virtualMachine.state) {
-                try await vm!.virtualMachine.pause()
-              }
+                  print("preparing VM to take a snapshot...")
+                  try await pauseForStateSave(state: vm!.virtualMachine.state) {
+                    try await vm!.virtualMachine.pause()
+                  }
 
-              print("creating a snapshot...")
-              try await vm!.virtualMachine.saveMachineStateTo(url: vmDir.stateURL)
+                  print("creating a snapshot...")
+                  try await vm!.virtualMachine.saveMachineStateTo(url: vmDir.stateURL)
 
-              print("snapshot created successfully! shutting down the VM...")
+                  print("snapshot created successfully! shutting down the VM...")
 
-              task.cancel()
-            } else {
-              print(RuntimeError.SuspendFailed("this functionality is only supported on macOS 14 (Sonoma) or newer"))
+                  task.cancel()
+                } else {
+                  print(RuntimeError.SuspendFailed("this functionality is only supported on macOS 14 (Sonoma) or newer"))
+
+                  OTel.shared.flush()
+                  Foundation.exit(1)
+                }
+              #endif
+            } catch (let e) {
+              print(RuntimeError.SuspendFailed(e.localizedDescription))
 
               OTel.shared.flush()
               Foundation.exit(1)
             }
-          #endif
-        } catch (let e) {
-          print(RuntimeError.SuspendFailed(e.localizedDescription))
-
-          OTel.shared.flush()
-          Foundation.exit(1)
+          }
         }
       }
     }

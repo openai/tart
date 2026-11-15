@@ -33,18 +33,40 @@ private func changeLiveState(_ name: String, paused: Bool) async throws {
 
 // No execution may be paused while startup is still waiting on guest work
 // (for example, the VNC IP-resolution deadline).
-struct LivePauseLifecycle {
-  var initialized = false
+@MainActor
+final class LivePauseLifecycle {
+  var initialized = false {
+    didSet { startPendingSuspend() }
+  }
   private var transitioning = false
+  private var suspendRequested = false
+  private var pendingSuspend: (() -> Void)?
 
-  mutating func beginTransition() -> Bool {
-    guard initialized && !transitioning else { return false }
+  func beginTransition() -> Bool {
+    guard initialized && !transitioning && !suspendRequested else { return false }
     transitioning = true
     return true
   }
 
-  mutating func endTransition() {
+  func endTransition() {
     transitioning = false
+    startPendingSuspend()
+  }
+
+  // Suspend also handles window close and app quit, so never discard it.
+  // Coalesce duplicate requests and give it priority over live pause/resume.
+  func requestSuspend(_ action: @escaping () -> Void) {
+    guard !suspendRequested else { return }
+    suspendRequested = true
+    pendingSuspend = action
+    startPendingSuspend()
+  }
+
+  private func startPendingSuspend() {
+    guard initialized && !transitioning, let action = pendingSuspend else { return }
+    pendingSuspend = nil
+    transitioning = true
+    action()
   }
 }
 
