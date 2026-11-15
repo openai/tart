@@ -149,6 +149,19 @@ final class SoftnetControlFDTests: XCTestCase {
     XCTAssertEqual(command.netSoftnetControlFd, 3)
   }
 
+  func testSubnetPoolImpliesSoftnet() throws {
+    let temporaryHome = try createTemporaryTartHome()
+    defer { try? FileManager.default.removeItem(at: temporaryHome) }
+    let previousHome = ProcessInfo.processInfo.environment["TART_HOME"]
+    setenv("TART_HOME", temporaryHome.path, 1)
+    defer { restoreEnvironment("TART_HOME", value: previousHome) }
+
+    let command = try Run.parse(["vm", "--net-softnet-subnet-pool", "192.168.64.0/18,172.20.0.0/16"])
+
+    XCTAssertTrue(command.netSoftnet)
+    XCTAssertEqual(command.netSoftnetSubnetPool, "192.168.64.0/18,172.20.0.0/16")
+  }
+
   func testControlFDIsRejectedWithHostNetworking() throws {
     let temporaryHome = try createTemporaryTartHome()
     defer { try? FileManager.default.removeItem(at: temporaryHome) }
