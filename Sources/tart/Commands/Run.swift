@@ -682,7 +682,9 @@ struct Run: AsyncParsableCommand {
             try await vm!.virtualMachine.resume()
           }
           if vm!.virtualMachine.state == .running {
-            try? FileManager.default.removeItem(at: vmDir.pausedURL)
+            if FileManager.default.fileExists(atPath: vmDir.pausedURL.path) {
+              try FileManager.default.removeItem(at: vmDir.pausedURL)
+            }
           }
         } catch { fputs("Failed to resume VM: \(error)\n", stderr) }
       }

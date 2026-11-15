@@ -277,3 +277,7 @@ tart clone --stacked ghcr.io/cirruslabs/macos-tahoe-base my-local-vm-name
 
 Pushing this VM preserves the disk relationship. Pulling another image from the
 same lineage reuses immutable disk files that are already in Tart's cache.
+
+## Pause without saving to disk
+
+Use `tart pause <vm>` and `tart resume <vm>` to pause execution while retaining the VM process and RAM. `tart list` reports this state as `paused`. Repeating either command in its target state is safe. Unlike `tart suspend`, this does not create or restore an encrypted machine-state file. RAM and a VM slot remain occupied, and the paused state does not survive termination of the VM process or host. `tart stop` also stops an in-memory paused VM.
