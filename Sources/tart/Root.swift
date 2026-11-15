@@ -28,6 +28,8 @@ struct Root: AsyncParsableCommand {
       Prune.self,
       Rename.self,
       Stop.self,
+      Pause.self,
+      Resume.self,
       Delete.self,
       FQN.self,
     ])

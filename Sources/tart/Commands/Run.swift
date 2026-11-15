@@ -644,6 +644,51 @@ struct Run: AsyncParsableCommand {
     }
     sigintSrc.activate()
 
+    // In-memory pause retains the VM process and never writes an encrypted snapshot.
+    try? FileManager.default.removeItem(at: vmDir.pausedURL)
+    var liveStateChangeInProgress = false
+    signal(SIGURG, SIG_IGN)
+    let pauseSource = DispatchSource.makeSignalSource(signal: SIGURG)
+    pauseSource.setEventHandler {
+      Task { @MainActor in
+        guard !liveStateChangeInProgress else { return }
+        liveStateChangeInProgress = true
+        defer { liveStateChangeInProgress = false }
+        do {
+          if vm!.virtualMachine.state == .running {
+            try await vm!.virtualMachine.pause()
+          }
+          if vm!.virtualMachine.state == .paused {
+            try Data().write(to: vmDir.pausedURL, options: .atomic)
+          }
+        } catch {
+          if vm!.virtualMachine.state == .paused {
+            try? await vm!.virtualMachine.resume()
+          }
+          fputs("Failed to pause VM: \(error)\n", stderr)
+        }
+      }
+    }
+    pauseSource.activate()
+    signal(SIGCONT, SIG_IGN)
+    let resumeSource = DispatchSource.makeSignalSource(signal: SIGCONT)
+    resumeSource.setEventHandler {
+      Task { @MainActor in
+        guard !liveStateChangeInProgress else { return }
+        liveStateChangeInProgress = true
+        defer { liveStateChangeInProgress = false }
+        do {
+          if vm!.virtualMachine.state == .paused {
+            try await vm!.virtualMachine.resume()
+          }
+          if vm!.virtualMachine.state == .running {
+            try? FileManager.default.removeItem(at: vmDir.pausedURL)
+          }
+        } catch { fputs("Failed to resume VM: \(error)\n", stderr) }
+      }
+    }
+    resumeSource.activate()
+
     // "tart suspend" / UI window closing support
     signal(SIGUSR1, SIG_IGN)
     let sigusr1Src = DispatchSource.makeSignalSource(signal: SIGUSR1)

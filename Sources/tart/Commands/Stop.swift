@@ -17,7 +17,7 @@ struct Stop: AsyncParsableCommand {
     switch try vmDir.state() {
     case .Suspended:
       try stopSuspended(vmDir)
-    case .Running:
+    case .Running, .Paused:
       try await stopRunning(vmDir)
     case .Stopped:
       throw RuntimeError.VMNotRunning(name)

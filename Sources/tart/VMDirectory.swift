@@ -5,6 +5,7 @@ import CryptoKit
 struct VMDirectory: Prunable {
   enum State: String {
     case Running = "running"
+    case Paused = "paused"
     case Suspended = "suspended"
     case Stopped = "stopped"
   }
@@ -20,6 +21,7 @@ struct VMDirectory: Prunable {
   var nvramURL: URL {
     baseURL.appendingPathComponent("nvram.bin")
   }
+  var pausedURL: URL { baseURL.appendingPathComponent("paused.live") }
   var stateURL: URL {
     baseURL.appendingPathComponent("state.vzvmsave")
   }
@@ -64,7 +66,7 @@ struct VMDirectory: Prunable {
 
   func state() throws -> State {
     if try running() {
-      return State.Running
+      return FileManager.default.fileExists(atPath: pausedURL.path) ? State.Paused : State.Running
     } else if FileManager.default.fileExists(atPath: stateURL.path) {
       return State.Suspended
     } else {

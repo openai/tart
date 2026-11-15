@@ -281,7 +281,7 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
     }
 
     if Task.isCancelled {
-      if (self.virtualMachine.state == VZVirtualMachine.State.running) {
+      if (self.virtualMachine.state == VZVirtualMachine.State.running || self.virtualMachine.state == VZVirtualMachine.State.paused) {
         print("Stopping VM...")
         try await stop()
       }
