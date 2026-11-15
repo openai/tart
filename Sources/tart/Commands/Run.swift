@@ -549,6 +549,7 @@ struct Run: AsyncParsableCommand {
     // now VM state will return "running" so we can unlock
     try storageLock.unlock()
 
+    var lifecycle = LivePauseLifecycle()
     let task = Task {
       do {
         var resume = false
@@ -618,6 +619,7 @@ struct Run: AsyncParsableCommand {
           }
         }
 
+        lifecycle.initialized = true
         try await vm!.run()
 
         if let vncImpl = vncImpl {
@@ -646,14 +648,15 @@ struct Run: AsyncParsableCommand {
 
     // In-memory pause retains the VM process and never writes an encrypted snapshot.
     try? FileManager.default.removeItem(at: vmDir.pausedURL)
-    var liveStateChangeInProgress = false
     signal(SIGURG, SIG_IGN)
     let pauseSource = DispatchSource.makeSignalSource(signal: SIGURG)
     pauseSource.setEventHandler {
       Task { @MainActor in
-        guard !liveStateChangeInProgress else { return }
-        liveStateChangeInProgress = true
-        defer { liveStateChangeInProgress = false }
+        guard lifecycle.beginTransition() else {
+          fputs("VM initialization or another state transition is still in progress; retry\n", stderr)
+          return
+        }
+        defer { lifecycle.endTransition() }
         do {
           if vm!.virtualMachine.state == .running {
             try await vm!.virtualMachine.pause()
@@ -674,9 +677,11 @@ struct Run: AsyncParsableCommand {
     let resumeSource = DispatchSource.makeSignalSource(signal: SIGCONT)
     resumeSource.setEventHandler {
       Task { @MainActor in
-        guard !liveStateChangeInProgress else { return }
-        liveStateChangeInProgress = true
-        defer { liveStateChangeInProgress = false }
+        guard lifecycle.beginTransition() else {
+          fputs("VM initialization or another state transition is still in progress; retry\n", stderr)
+          return
+        }
+        defer { lifecycle.endTransition() }
         do {
           if vm!.virtualMachine.state == .paused {
             try await vm!.virtualMachine.resume()
@@ -695,14 +700,21 @@ struct Run: AsyncParsableCommand {
     signal(SIGUSR1, SIG_IGN)
     let sigusr1Src = DispatchSource.makeSignalSource(signal: SIGUSR1)
     sigusr1Src.setEventHandler {
-      Task {
+      Task { @MainActor in
+        guard lifecycle.beginTransition() else {
+          fputs("VM initialization or another state transition is still in progress; retry\n", stderr)
+          return
+        }
+        defer { lifecycle.endTransition() }
         do {
           #if arch(arm64)
             if #available(macOS 14, *) {
               try vm!.configuration.validateSaveRestoreSupport()
 
-              print("pausing VM to take a snapshot...")
-              try await vm!.virtualMachine.pause()
+              print("preparing VM to take a snapshot...")
+              try await pauseForStateSave(state: vm!.virtualMachine.state) {
+                try await vm!.virtualMachine.pause()
+              }
 
               print("creating a snapshot...")
               try await vm!.virtualMachine.saveMachineStateTo(url: vmDir.stateURL)
