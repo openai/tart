@@ -701,6 +701,10 @@ struct Run: AsyncParsableCommand {
     let sigusr1Src = DispatchSource.makeSignalSource(signal: SIGUSR1)
     sigusr1Src.setEventHandler {
       Task { @MainActor in
+        #if !arch(arm64)
+          fputs("VM suspension is only supported on Apple silicon; VM state is unchanged\n", stderr)
+          return
+        #endif
         lifecycle.requestSuspend {
           Task { @MainActor in
             defer { lifecycle.endTransition() }
