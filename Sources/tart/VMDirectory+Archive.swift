@@ -11,9 +11,12 @@ fileprivate let permissions = FilePermissions(rawValue: 0o644)
 // [2]: https://developer.apple.com/documentation/compression/algorithm/lzfse
 extension VMDirectory {
   func exportToArchive(path: String) throws {
-    if try running() {
+    // Keep "tart run" from starting the VM until it's exported
+    let lock = try self.lock()
+    if try !lock.trylock() {
       throw RuntimeError.ExportFailed("VM \"\(name)\" must be stopped before export")
     }
+    defer { withExtendedLifetime(lock) {} }
 
     let temporaryArchive = try stackedArchiveDirectoryIfNeeded()
     let archiveSourceURL = temporaryArchive?.vmDirectory.baseURL ?? baseURL
@@ -64,7 +67,13 @@ extension VMDirectory {
       return
     }
 
-    try encodeStream.writeDirectoryContents(archiveFrom: FilePath(archiveSourceURL.path), keySet: keySet)
+    // The lock above is an fcntl(2) lock on config.json, which is released as soon as we close
+    // any descriptor of that file, so archive config.json last, after the disk and NVRAM
+    let configPath = FilePath(configURL.lastPathComponent)
+    try encodeStream.writeDirectoryContents(archiveFrom: FilePath(archiveSourceURL.path), keySet: keySet,
+                                            selectUsing: { _, path, _ in path == configPath ? .skip : .ok })
+    try encodeStream.writeDirectoryContents(archiveFrom: FilePath(archiveSourceURL.path), keySet: keySet,
+                                            selectUsing: { _, path, _ in path == configPath ? .ok : .skip })
   }
 
   func importFromArchive(path: String) throws {
