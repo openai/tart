@@ -15,7 +15,7 @@ struct UnsupportedOSError: Error, CustomStringConvertible {
   let description: String
 
   init(_ what: String, _ plural: String, _ requires: String = "running macOS 13.0 (Ventura) or newer") {
-    description = "error: \(what) \(plural) only supported on hosts \(requires)"
+    description = "\(what) \(plural) only supported on hosts \(requires)"
   }
 }
 
