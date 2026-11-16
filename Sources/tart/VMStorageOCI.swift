@@ -122,6 +122,10 @@ class VMStorageOCI: PrunableStorage {
     let digest = vmURL(name).resolvingSymlinksInPath().lastPathComponent
 
     if !digest.starts(with: "sha256:") {
+      if !exists(name) {
+        throw RuntimeError.VMDoesNotExist(name: name.description)
+      }
+
       throw RuntimeError.OCIStorageError("\(name) is not a digest and doesn't point to a digest")
     }
 
