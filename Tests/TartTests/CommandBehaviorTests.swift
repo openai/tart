@@ -212,6 +212,24 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testClonePruneLimitFromEnvironment() throws {
+    let key = "TART_CLONE_PRUNE_LIMIT"
+    let previous = ProcessInfo.processInfo.environment[key]
+    defer { restoreEnvironment(key, to: previous) }
+
+    let args = ["source", "destination"]
+    unsetenv(key)
+    XCTAssertEqual(try Clone.parse(args).pruneLimitBytes(), 100 << 30)
+    setenv(key, "20", 1)
+    XCTAssertEqual(try Clone.parse(args).pruneLimitBytes(), 20 << 30)
+
+    for invalid in ["invalid", String(UInt.max)] {
+      setenv(key, invalid, 1)
+      XCTAssertThrowsError(try Clone.parse(args).pruneLimitBytes())
+      XCTAssertEqual(try Clone.parse(args + ["--prune-limit", "0"]).pruneLimitBytes(), 0)
+    }
+  }
+
   func testCloneRejectsExistingDestinationUnlessOverwriteIsRequested() async throws {
     try await withTemporaryTartHome {
       let source = try makeStandaloneVM(named: "source", diskContents: "source")
