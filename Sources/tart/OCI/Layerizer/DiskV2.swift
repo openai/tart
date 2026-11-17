@@ -28,7 +28,8 @@ class DiskV2: Disk {
     registry: Registry,
     chunkSizeMb: Int,
     concurrency: UInt,
-    progress: Progress
+    progress: Progress,
+    chunkCache: CompressedChunkCache? = nil
   ) async throws -> [OCIManifestLayer] {
     var pushedLayers: [(index: Int, pushedLayer: OCIManifestLayer)] = []
 
@@ -48,23 +49,37 @@ class DiskV2: Disk {
 
         // Launch a disk layer pushing task
         group.addTask {
+          // Hash the chunk using large reads instead of faulting in the mapped pages,
+          // which also warms up the page cache for the compression below
+          let uncompressedContentDigest = try Digest.hash(diskURL, offset: UInt64(index * layerLimitBytes),
+                                                          size: UInt64(data.count))
+
+          // No need to compress the chunk if we've already done so for a previous push
+          // and the registry still has the result
+          if let blob = chunkCache?.compressedBlob(for: uncompressedContentDigest),
+             try await retryOnURLError({ try await registry.blobExists(blob.digest) }) {
+            progress.completedUnitCount += Int64(data.count)
+
+            return (index, OCIManifestLayer(
+              mediaType: mediaType,
+              size: blob.size,
+              digest: blob.digest,
+              uncompressedSize: UInt64(data.count),
+              uncompressedContentDigest: uncompressedContentDigest
+            ))
+          }
+
           let compressedData = try (data as NSData).compressed(using: .lz4) as Data
           let compressedDataDigest = Digest.hash(compressedData)
 
-          try await retry(maxAttempts: 5) {
+          try await retryOnURLError {
             if try await !registry.blobExists(compressedDataDigest) {
               _ = try await registry.pushBlob(fromData: compressedData, chunkSizeMb: chunkSizeMb, digest: compressedDataDigest)
             }
-          } recoverFromFailure: { error in
-            if error is URLError {
-              print("Error: \(error.localizedDescription)")
-              print("Attempting to re-try...")
-
-              return .retry
-            }
-
-            return .throw
           }
+
+          try? chunkCache?.remember(Descriptor(size: compressedData.count, digest: compressedDataDigest),
+                                    for: uncompressedContentDigest)
 
           // Update progress using a relative value
           progress.completedUnitCount += Int64(data.count)
@@ -74,7 +89,7 @@ class DiskV2: Disk {
             size: compressedData.count,
             digest: compressedDataDigest,
             uncompressedSize: UInt64(data.count),
-            uncompressedContentDigest: Digest.hash(data)
+            uncompressedContentDigest: uncompressedContentDigest
           ))
         }
       }
@@ -88,6 +103,21 @@ class DiskV2: Disk {
       $0.index < $1.index
     }.map {
       $0.pushedLayer
+    }
+  }
+
+  private static func retryOnURLError<T>(_ operation: () async throws -> T) async throws -> T {
+    try await retry(maxAttempts: 5) {
+      try await operation()
+    } recoverFromFailure: { error in
+      if error is URLError {
+        print("Error: \(error.localizedDescription)")
+        print("Attempting to re-try...")
+
+        return .retry
+      }
+
+      return .throw
     }
   }
 

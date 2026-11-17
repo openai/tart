@@ -250,6 +250,9 @@ Once credentials are saved for `acme.io`, run the following command to push a lo
 tart push my-local-vm-name acme.io/remoteorg/name:latest acme.io/remoteorg/name:v1.0.0
 ```
 
+Disk chunks that Tart has already pushed from this machine are not compressed again if the registry still has them,
+so pushing a VM whose disk changed little is much faster than the first push.
+
 ### Pulling a Remote Image
 
 You can either pull an image:

@@ -212,6 +212,17 @@ extension VMDirectory {
     chunkSizeMb: Int,
     concurrency: UInt
   ) async throws -> ([OCIManifestLayer], [String: String]) {
+    // pushToRegistry() reads config.json before reaching this point. Closing
+    // that read descriptor can release the caller's fcntl PID lock, so take a
+    // fresh lock before hashing, uploading, and inspecting the disk.
+    let diskLock = try lock()
+    guard try diskLock.trylock() else {
+      throw RuntimeError.VMIsRunning(name)
+    }
+    defer { try? diskLock.unlock() }
+
+    let chunkCache = try? CompressedChunkCache()
+
     guard isStackedVM else {
       let diskSize = try FileManager.default.attributesOfItem(atPath: diskURL.path)[.size] as! Int64
       defaultLogger.appendNewLine("pushing disk... this will take a while...")
@@ -224,20 +235,13 @@ extension VMDirectory {
         registry: registry,
         chunkSizeMb: chunkSizeMb,
         concurrency: concurrency,
-        progress: progress
+        progress: progress,
+        chunkCache: chunkCache
       )
       return (layers, [uncompressedDiskSizeAnnotation: String(diskSize)])
     }
 
     let localManifest = try OCIManifest(fromJSON: Data(contentsOf: manifestURL))
-    // pushToRegistry() reads config.json before reaching this point. Closing
-    // that read descriptor can release the caller's fcntl PID lock, so take a
-    // fresh lock before hashing, uploading, and inspecting the writable overlay.
-    let stackedDiskLock = try lock()
-    guard try stackedDiskLock.trylock() else {
-      throw RuntimeError.VMIsRunning(name)
-    }
-    defer { try? stackedDiskLock.unlock() }
 
     let inheritedGroups: [TartDiskFileGroup]
     switch try localManifest.tartDiskRepresentation() {
@@ -257,7 +261,8 @@ extension VMDirectory {
         contentStore: contentStore,
         registry: registry,
         chunkSizeMb: chunkSizeMb,
-        concurrency: concurrency
+        concurrency: concurrency,
+        chunkCache: chunkCache
       ))
     }
 
@@ -272,7 +277,8 @@ extension VMDirectory {
       registry: registry,
       chunkSizeMb: chunkSizeMb,
       concurrency: concurrency,
-      progress: progress
+      progress: progress,
+      chunkCache: chunkCache
     )
     layers.append(contentsOf: annotatedChunks(chunks, kind: .asifOverlay, contentDigest: contentDigest))
 
@@ -297,7 +303,8 @@ extension VMDirectory {
     contentStore: ContentStore,
     registry: Registry,
     chunkSizeMb: Int,
-    concurrency: UInt
+    concurrency: UInt,
+    chunkCache: CompressedChunkCache?
   ) async throws -> [OCIManifestLayer] {
     guard let contentDigest = group.contentDigest else {
       throw RuntimeError.VMConfigurationError("stacked VM is missing a pinned disk file digest")
@@ -328,7 +335,8 @@ extension VMDirectory {
       registry: registry,
       chunkSizeMb: chunkSizeMb,
       concurrency: concurrency,
-      progress: progress
+      progress: progress,
+      chunkCache: chunkCache
     )
 
     return annotatedChunks(chunks, kind: group.kind, contentDigest: contentDigest)
