@@ -553,6 +553,7 @@ struct Run: AsyncParsableCommand {
     // now VM state will return "running" so we can unlock
     try storageLock.unlock()
 
+    let lifecycle = LivePauseLifecycle()
     let task = Task {
       do {
         var resume = false
@@ -622,6 +623,7 @@ struct Run: AsyncParsableCommand {
           }
         }
 
+        lifecycle.initialized = true
         try await vm!.run()
 
         if let vncImpl = vncImpl {
@@ -648,37 +650,98 @@ struct Run: AsyncParsableCommand {
     }
     sigintSrc.activate()
 
+    // In-memory pause retains the VM process and never writes an encrypted snapshot.
+    try? FileManager.default.removeItem(at: vmDir.pausedURL)
+    signal(SIGURG, SIG_IGN)
+    let pauseSource = DispatchSource.makeSignalSource(signal: SIGURG)
+    pauseSource.setEventHandler {
+      Task { @MainActor in
+        guard lifecycle.beginTransition() else {
+          fputs("VM initialization or another state transition is still in progress; retry\n", stderr)
+          return
+        }
+        defer { lifecycle.endTransition() }
+        do {
+          if vm!.virtualMachine.state == .running {
+            try await vm!.virtualMachine.pause()
+          }
+          if vm!.virtualMachine.state == .paused {
+            try Data().write(to: vmDir.pausedURL, options: .atomic)
+          }
+        } catch {
+          if vm!.virtualMachine.state == .paused {
+            try? await vm!.virtualMachine.resume()
+          }
+          fputs("Failed to pause VM: \(error)\n", stderr)
+        }
+      }
+    }
+    pauseSource.activate()
+    signal(SIGCONT, SIG_IGN)
+    let resumeSource = DispatchSource.makeSignalSource(signal: SIGCONT)
+    resumeSource.setEventHandler {
+      Task { @MainActor in
+        guard lifecycle.beginTransition() else {
+          fputs("VM initialization or another state transition is still in progress; retry\n", stderr)
+          return
+        }
+        defer { lifecycle.endTransition() }
+        do {
+          if vm!.virtualMachine.state == .paused {
+            try await vm!.virtualMachine.resume()
+          }
+          if vm!.virtualMachine.state == .running {
+            if FileManager.default.fileExists(atPath: vmDir.pausedURL.path) {
+              try FileManager.default.removeItem(at: vmDir.pausedURL)
+            }
+          }
+        } catch { fputs("Failed to resume VM: \(error)\n", stderr) }
+      }
+    }
+    resumeSource.activate()
+
     // "tart suspend" / UI window closing support
     signal(SIGUSR1, SIG_IGN)
     let sigusr1Src = DispatchSource.makeSignalSource(signal: SIGUSR1)
     sigusr1Src.setEventHandler {
-      Task {
-        do {
-          #if arch(arm64)
-            if #available(macOS 14, *) {
-              try vm!.configuration.validateSaveRestoreSupport()
+      Task { @MainActor in
+        #if !arch(arm64)
+          fputs("VM suspension is only supported on Apple silicon; VM state is unchanged\n", stderr)
+          return
+        #endif
+        lifecycle.requestSuspend {
+          Task { @MainActor in
+            defer { lifecycle.endTransition() }
+            do {
+              #if arch(arm64)
+                if #available(macOS 14, *) {
+                  try vm!.configuration.validateSaveRestoreSupport()
 
-              print("pausing VM to take a snapshot...")
-              try await vm!.virtualMachine.pause()
+                  print("preparing VM to take a snapshot...")
+                  try await pauseForStateSave(state: vm!.virtualMachine.state) {
+                    try await vm!.virtualMachine.pause()
+                  }
 
-              print("creating a snapshot...")
-              try await vm!.virtualMachine.saveMachineStateTo(url: vmDir.stateURL)
+                  print("creating a snapshot...")
+                  try await vm!.virtualMachine.saveMachineStateTo(url: vmDir.stateURL)
 
-              print("snapshot created successfully! shutting down the VM...")
+                  print("snapshot created successfully! shutting down the VM...")
 
-              task.cancel()
-            } else {
-              print(RuntimeError.SuspendFailed("this functionality is only supported on macOS 14 (Sonoma) or newer"))
+                  task.cancel()
+                } else {
+                  print(RuntimeError.SuspendFailed("this functionality is only supported on macOS 14 (Sonoma) or newer"))
+
+                  OTel.shared.flush()
+                  Foundation.exit(1)
+                }
+              #endif
+            } catch (let e) {
+              print(RuntimeError.SuspendFailed(e.localizedDescription))
 
               OTel.shared.flush()
               Foundation.exit(1)
             }
-          #endif
-        } catch (let e) {
-          print(RuntimeError.SuspendFailed(e.localizedDescription))
-
-          OTel.shared.flush()
-          Foundation.exit(1)
+          }
         }
       }
     }
