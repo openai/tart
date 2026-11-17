@@ -32,6 +32,9 @@ struct VMDirectory: Prunable {
   var controlSocketURL: URL {
     URL(fileURLWithPath: "control.sock", relativeTo: baseURL)
   }
+  var usbSocketURL: URL {
+    URL(fileURLWithPath: "usb.sock", relativeTo: baseURL)
+  }
 
   var explicitlyPulledMark: URL {
     baseURL.appendingPathComponent(".explicitly-pulled")

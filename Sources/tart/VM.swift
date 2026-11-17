@@ -40,6 +40,9 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
 
   var network: Network
 
+  // Devices shown in the USB menu in the menu bar
+  @Published var usbMenuItems: [USBMenuItem] = []
+
   init(vmDir: VMDirectory,
        network: Network = NetworkShared(),
        additionalStorageDevices: [VZStorageDeviceConfiguration] = [],
@@ -50,6 +53,7 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
        audio: Bool = true,
        clipboard: Bool = true,
        noUSBAccessories: Bool = false,
+       usbPassthrough: Bool = false,
        readOnly: Bool = false,
        sync: VZDiskImageSynchronizationMode = .full,
        caching: VZDiskImageCachingMode? = nil,
@@ -76,6 +80,7 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
                                                 audio: audio,
                                                 clipboard: clipboard,
                                                 noUSBAccessories: noUSBAccessories,
+                                                usbPassthrough: usbPassthrough,
                                                 readOnly: readOnly,
                                                 sync: sync,
                                                 caching: caching,
@@ -329,6 +334,7 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
     audio: Bool = true,
     clipboard: Bool = true,
     noUSBAccessories: Bool = false,
+    usbPassthrough: Bool = false,
     readOnly: Bool = false,
     sync: VZDiskImageSynchronizationMode = .full,
     caching: VZDiskImageCachingMode? = nil,
@@ -379,6 +385,11 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
       noPointer: noPointer,
       noKeyboard: noKeyboard
     )
+
+    // USB passthrough
+    if usbPassthrough, #available(macOS 27, *) {
+      configuration.usbControllers = [VZXHCIControllerConfiguration()]
+    }
 
     // Networking
     configuration.networkDevices = network.attachments().map {
