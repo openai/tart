@@ -21,7 +21,7 @@ class KeychainCredentialsProvider: CredentialsProvider {
         return nil
       }
 
-      throw CredentialsProviderError.Failed(message: "Keychain returned unsuccessful status \(status)")
+      throw CredentialsProviderError.Failed(message: "Keychain failed to retrieve item: \(status.explanation())")
     }
 
     guard let item = item as? [String: Any],
