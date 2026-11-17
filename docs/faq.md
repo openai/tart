@@ -183,7 +183,7 @@ sudo apt-get install samba
 
 When invoking the Tart in an SSH session, you might get error like this:
 
->Keychain returned unsuccessful status -25308
+>Keychain failed to retrieve item: User interaction is not allowed.
 
 ...or this:
 
