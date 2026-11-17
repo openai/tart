@@ -1017,6 +1017,10 @@ struct AdditionalDisk {
   init(parseFrom: String) throws {
     let (diskPath, readOnly, syncModeRaw, cachingModeRaw) = Self.parseOptions(parseFrom)
 
+    if diskPath.isEmpty {
+      throw ValidationError("--disk requires a path or URL, e.g. --disk=/path/to/disk.img")
+    }
+
     self = try Self.craft(
       diskPath,
       readOnly: readOnly,
@@ -1151,7 +1155,7 @@ struct AdditionalDisk {
   static func parseOptions(_ parseFrom: String) -> (String, Bool, String, String) {
     var arguments = parseFrom.split(separator: ":")
 
-    let options = DiskOptions(String(arguments.last!))
+    let options = DiskOptions(String(arguments.last ?? ""))
     if options.foundAtLeastOneOption {
       arguments.removeLast()
     }
@@ -1274,6 +1278,10 @@ struct DirectoryShare {
     // Consume options
     (self.readOnly, self.mountTag, parseFrom) = Self.parseOptions(parseFrom)
 
+    if parseFrom.split(separator: ":").isEmpty {
+      throw ValidationError("--dir requires a path, e.g. --dir=build:/Users/admin/build")
+    }
+
     // Special case for URLs
     if parseFrom.hasPrefix("http:") || parseFrom.hasPrefix("https:") {
       self.name = nil
@@ -1295,7 +1303,7 @@ struct DirectoryShare {
 
   static func parseOptions(_ parseFrom: String) -> (Bool, String, String) {
     var arguments = parseFrom.split(separator: ":")
-    let options = arguments.last!.split(separator: ",")
+    let options = arguments.last?.split(separator: ",") ?? []
 
     var readOnly: Bool = false
     var mountTag: String = VZVirtioFileSystemDeviceConfiguration.macOSGuestAutomountTag

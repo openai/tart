@@ -451,6 +451,17 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testAdditionalDiskWithoutPathIsRejected() throws {
+    for parseFrom in ["", ":", "ro", ":ro"] {
+      XCTAssertThrowsError(try AdditionalDisk(parseFrom: parseFrom), "--disk=\"\(parseFrom)\"") { error in
+        XCTAssertEqual(
+          (error as? ValidationError)?.message,
+          "--disk requires a path or URL, e.g. --disk=/path/to/disk.img"
+        )
+      }
+    }
+  }
+
   func testGarbageCollectionPreservesLockedTemporaryDirectory() throws {
     try withTemporaryTartHome {
       let temporaryVMDir = try VMDirectory.temporary()
