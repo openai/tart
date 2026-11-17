@@ -283,6 +283,24 @@ class VMStorageOCI: PrunableStorage {
     }
   }
 
+  /// Remove tag symlinks in `directory` whose target no longer exists.
+  fileprivate func removeDanglingTags(in directory: URL) throws {
+    let contentStore = try ContentStore()
+    try contentStore.withPruneLock {
+      guard let entries = try? FileManager.default.contentsOfDirectory(at: directory,
+                                                                        includingPropertiesForKeys: [.isSymbolicLinkKey]) else {
+        return
+      }
+
+      for entry in entries where try entry.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
+        // fileExists(atPath:) follows the symlink, so it's false once the target is gone
+        if !FileManager.default.fileExists(atPath: entry.path) {
+          try FileManager.default.removeItem(at: entry)
+        }
+      }
+    }
+  }
+
   func list() throws -> [(String, VMDirectory, Bool)] {
     var result: [(String, VMDirectory, Bool)] = Array()
 
@@ -830,6 +848,9 @@ private struct CachedImagePrunable: Prunable {
 
   func delete() throws {
     try vmDir.delete()
+    // Tags are symlinks next to the digest record they point to. Remove the
+    // ones this deletion left dangling instead of leaving them for `tart prune --gc`.
+    try VMStorageOCI().removeDanglingTags(in: vmDir.baseURL.absoluteURL.deletingLastPathComponent())
     // Deleting a record can make attributed content unreferenced. Run GC now
     // so one prune invocation reclaims those bytes.
     try VMStorageOCI().gcContent()
