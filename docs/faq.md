@@ -257,7 +257,16 @@ overlay adds another ASIF file to validate and assemble at run time.
 
 Disk resizing works on most cloud-ready Linux distributions out-of-the box (e.g. Ubuntu Cloud Images have the `cloud-initramfs-growroot` package installed that runs on boot) and on the rest of the distributions by running the `growpart` or `resize2fs` commands.
 
-For macOS, however, things are a bit more complicated, and you generally have two options: automated and manual resizing.
+For a stopped macOS VM with a standalone raw disk, Tart can move Recovery to the end of the larger disk:
+
+```shell
+tart set my-vm --disk-size 160 --relocate-recovery
+tart run my-vm
+```
+
+`--relocate-recovery` preserves Recovery and validates both GPT copies before replacing the disk image. It requires the standard iBoot, APFS, Recovery partition order. ASIF disks, stacked disks, running VMs and suspended VMs are not supported by this option.
+
+The guest filesystem must also grow. If the [Tart Guest Agent](https://github.com/openai/tart-guest-agent) is installed as a root launch daemon with `--run-daemon`, it expands APFS on the next boot. Otherwise, expand APFS from inside the guest or use Packer. Check the mounted filesystem's capacity before starting work; the disk image size alone does not confirm that APFS grew.
 
 For the automated option, you can use [Packer](https://www.packer.io/) with the [Packer builder for Tart VMs](https://developer.hashicorp.com/packer/integrations/cirruslabs/tart/latest/components/builder/tart). The latter has two has configuration directives related to the disk resizing behavior:
 
@@ -265,7 +274,7 @@ For the automated option, you can use [Packer](https://www.packer.io/) with the 
 * [`recovery_partition`](https://developer.hashicorp.com/packer/integrations/cirruslabs/tart/latest/components/builder/tart#configuration-reference) — controls what to do with the recovery partition when resizing the disk
     * you can either keep, delete or relocate it to the end of the disk
 
-For the manual approach, you have to remove the recovery partition first, repair the disk and the resize the APFS container.
+Another manual approach is to remove Recovery, repair the disk and resize the APFS container. Removing Recovery can prevent macOS updates from installing; use relocation if the VM needs system updates.
 
 To do this, first we'll need to identify the primary disk and the APFS containers by running the command below from within a VM:
 
