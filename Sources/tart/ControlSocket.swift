@@ -157,9 +157,7 @@ class ControlSocket {
     // Either direction ending, even with an error, leaves the other one running, so that it
     // can still deliver what its side sent before hanging up.
     do {
-      for try await message in inbound {
-        try await outbound.write(message)
-      }
+      try await outbound.write(contentsOf: inbound)
 
       // A write returns once the channel has the data, not once it's in the socket. Shutting
       // down the output of a channel whose input is already closed closes it completely, which

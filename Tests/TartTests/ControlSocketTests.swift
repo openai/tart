@@ -201,17 +201,19 @@ final class ControlSocketTests: XCTestCase {
     let response = (0..<(8 * 1024 * 1024)).map { UInt8(truncatingIfNeeded: $0 &* 17) }
 
     try await withProxy { client, vm in
-      // Each side writes more than the socket buffers hold and hangs up right away,
-      // so the proxy still holds unwritten data when it sees the EOF.
+      // Read while sending so neither peer closes with its own writes still queued.
+      // The proxy must deliver all forwarded data before propagating EOF.
       async let clientReceived: [UInt8] = client.executeThenClose { inbound, outbound in
-        try await outbound.write(ByteBuffer(bytes: request))
+        async let received = Self.readToEnd(inbound)
+        try await client.channel.writeAndFlush(ByteBuffer(bytes: request)).get()
         outbound.finish()
-        return try await Self.readToEnd(inbound)
+        return try await received
       }
       async let vmReceived: [UInt8] = vm.executeThenClose { inbound, outbound in
-        try await outbound.write(ByteBuffer(bytes: response))
+        async let received = Self.readToEnd(inbound)
+        try await vm.channel.writeAndFlush(ByteBuffer(bytes: response)).get()
         outbound.finish()
-        return try await Self.readToEnd(inbound)
+        return try await received
       }
 
       let (fromVM, fromClient) = try await (clientReceived, vmReceived)
