@@ -134,6 +134,32 @@ struct DiskImageStack {
     throw DiskImageStackError.unavailable
   }
 
+  /// Writes the whole stack as one standalone disk image in the base's format.
+  func flatten(to diskURL: URL) throws {
+    // diskutil doesn't check that an overlay belongs to the layer below it
+    try validate()
+
+    // Keep the base's format, because converting it in the same step loses
+    // the last blocks of the base when the writable overlay has been grown
+    try Diskutil.imageCreate(
+      from: baseURL,
+      overlays: immutableOverlayURLs + [writableOverlayURL],
+      format: baseFormat,
+      to: diskURL
+    )
+  }
+
+  func validate() throws {
+    #if canImport(DiskImageKit)
+      if #available(macOS 27.0, *) {
+        try validateWithDiskImageKit()
+        return
+      }
+    #endif
+
+    throw DiskImageStackError.unavailable
+  }
+
   func growWritableOverlay(toBlockCount blockCount: UInt64) throws {
     #if canImport(DiskImageKit)
       if #available(macOS 27.0, *) {
@@ -180,6 +206,18 @@ struct DiskImageStack {
         cachingMode: cachingMode,
         synchronizationMode: synchronizationMode
       )
+    }
+
+    @available(macOS 27.0, *)
+    private func validateWithDiskImageKit() throws {
+      guard FileManager.default.fileExists(atPath: writableOverlayURL.path) else {
+        throw DiskImageStackError.writableOverlayMissing(writableOverlayURL)
+      }
+
+      let parent = try validatedParentImage()
+      let writableOverlay = try openOverlay(at: writableOverlayURL, mode: .readOnly)
+      let stackedImage = try append(writableOverlay, to: parent, at: writableOverlayURL)
+      try validateAppendedOverlay(stackedImage, at: writableOverlayURL)
     }
 
     @available(macOS 27.0, *)

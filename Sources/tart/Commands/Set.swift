@@ -47,7 +47,7 @@ struct Set: AsyncParsableCommand {
     // overlay.asif, which is not a supported local layout. Reject before
     // saving any other requested configuration changes.
     if disk != nil, vmDir.isStackedVM {
-      throw ValidationError("--disk is not supported for VMs with a stacked disk")
+      throw ValidationError("--disk is not supported for VMs with a stacked disk, flatten it first with \"tart flatten \(name)\"")
     }
 
     if randomMAC && mac != nil {

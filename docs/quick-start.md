@@ -277,3 +277,12 @@ tart clone --stacked ghcr.io/cirruslabs/macos-tahoe-base my-local-vm-name
 
 Pushing this VM preserves the disk relationship. Pulling another image from the
 same lineage reuses immutable disk files that are already in Tart's cache.
+
+To turn a stacked VM back into a standalone one, for example to start a new
+lineage from it without rebuilding, fold its base and overlays into a single disk:
+
+```bash
+tart flatten my-local-vm-name
+```
+
+Pushing the flattened VM publishes a standalone image.

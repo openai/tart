@@ -45,6 +45,20 @@ struct Diskutil {
     }
   }
 
+  static func imageCreate(from sourceURL: URL, overlays: [URL], format: DiskImageFormat, to diskURL: URL) throws {
+    var arguments = ["image", "create", "from", "--format", format.rawValue.uppercased()]
+    for overlayURL in overlays {
+      arguments += ["--shadow", overlayURL.path]
+    }
+    arguments += [sourceURL.path, diskURL.path]
+
+    do {
+      _ = try run(arguments)
+    } catch {
+      throw RuntimeError.FailedToCreateDisk("Failed to flatten disk image: \(error)")
+    }
+  }
+
   static func imageInfo(_ diskURL: URL) throws -> ImageInfo {
     do {
       let (stdoutData, _) = try run([
