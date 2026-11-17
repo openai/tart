@@ -9,7 +9,7 @@ struct Stop: AsyncParsableCommand {
   @Argument(help: "VM name", completion: .custom(completeRunningMachines))
   var name: String
 
-  @Option(name: [.short, .long], help: "Seconds to wait for graceful termination before forcefully terminating the VM")
+  @Option(name: [.short, .long], help: "Seconds to wait for graceful termination before forcefully terminating the VM; 0 skips graceful termination")
   var timeout: UInt64 = 30
 
   func run() async throws {
@@ -48,7 +48,9 @@ struct Stop: AsyncParsableCommand {
     // because it's a less common scenario and it would be
     // nice to know for the user that we've tried all methods
     // and failed to shutdown the VM.
-    kill(pid, SIGINT)
+    if timeout > 0 {
+      kill(pid, SIGINT)
+    }
 
     // Ensure that the VM has terminated
     var gracefulWaitDuration = Measurement(value: Double(timeout), unit: UnitDuration.seconds)
