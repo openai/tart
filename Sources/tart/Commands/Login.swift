@@ -27,6 +27,12 @@ struct Login: AsyncParsableCommand {
     if usernameProvided != passwordProvided {
       throw ValidationError("both --username and --password-stdin are required")
     }
+
+    // Registry rejects improperly formatted hosts, but it's only created
+    // when validating credentials, so check the host here for --no-validate
+    if noValidate {
+      _ = try Registry(host: host, namespace: "", insecure: insecure)
+    }
   }
 
   func run() async throws {
