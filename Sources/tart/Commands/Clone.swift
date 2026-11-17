@@ -41,9 +41,7 @@ struct Clone: AsyncParsableCommand {
   var pruneLimit: UInt = 100
 
   func validate() throws {
-    if newName.contains("/") {
-      throw ValidationError("<new-name> should be a local name")
-    }
+    try validateLocalName(newName, argument: "<new-name>")
 
     if concurrency < 1 {
       throw ValidationError("network concurrency cannot be less than 1")

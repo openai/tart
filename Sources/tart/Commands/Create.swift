@@ -23,9 +23,7 @@ struct Create: AsyncParsableCommand {
   var diskFormat: DiskImageFormat = .raw
 
   func validate() throws {
-    if name.contains("/") {
-      throw ValidationError("<name> should be a local name")
-    }
+    try validateLocalName(name)
 
     if fromIPSW == nil && !linux {
       throw ValidationError("Please specify either a --from-ipsw or --linux option!")

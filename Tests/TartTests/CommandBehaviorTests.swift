@@ -158,6 +158,18 @@ final class CommandBehaviorTests: XCTestCase {
     XCTAssertNoThrow(try Set.parse(["vm", "--cpu", "4"]))
   }
 
+  func testValidateLocalName() {
+    XCTAssertThrowsError(try validateLocalName("org/vm"))
+    XCTAssertThrowsError(try validateLocalName("ghcr.io/org/vm", argument: "<new-name>"))
+    XCTAssertNoThrow(try validateLocalName("vm"))
+  }
+
+  func testValidateGreaterThanZero() {
+    XCTAssertThrowsError(try validateGreaterThanZero(0 as UInt16?, option: "cpu"))
+    XCTAssertNoThrow(try validateGreaterThanZero(4 as UInt16?, option: "cpu"))
+    XCTAssertNoThrow(try validateGreaterThanZero(nil as UInt16?, option: "cpu"))
+  }
+
   func testStandaloneDeleteDoesNotInitializeContentStore() throws {
     try withTemporaryTartHome {
       let vmDir = try VMStorageLocal().create("standalone")

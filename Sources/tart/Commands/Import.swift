@@ -11,9 +11,7 @@ struct Import: AsyncParsableCommand {
   var name: String
 
   func validate() throws {
-    if name.contains("/") {
-      throw ValidationError("<name> should be a local name")
-    }
+    try validateLocalName(name)
   }
 
   func run() async throws {

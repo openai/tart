@@ -41,25 +41,15 @@ struct Set: AsyncParsableCommand {
   var diskSize: UInt16?
 
   func validate() throws {
-    if name.contains("/") {
-      throw ValidationError("<name> should be a local name")
-    }
+    try validateLocalName(name)
 
     if randomMAC && mac != nil {
       throw ValidationError("--random-mac and --mac are mutually exclusive")
     }
 
-    if let cpu = cpu, cpu == 0 {
-      throw ValidationError("--cpu must be greater than zero")
-    }
-
-    if let memory = memory, memory == 0 {
-      throw ValidationError("--memory must be greater than zero")
-    }
-
-    if let diskSize = diskSize, diskSize == 0 {
-      throw ValidationError("--disk-size must be greater than zero")
-    }
+    try validateGreaterThanZero(cpu, option: "cpu")
+    try validateGreaterThanZero(memory, option: "memory")
+    try validateGreaterThanZero(diskSize, option: "disk-size")
   }
 
   func run() async throws {
