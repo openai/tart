@@ -1,3 +1,4 @@
+import ArgumentParser
 import XCTest
 @testable import tart
 
@@ -54,7 +55,12 @@ final class DirectoryShareTests: XCTestCase {
 
   func testMissingPathIsRejected() throws {
     for parseFrom in ["", ":", "ro", ":ro", "tag=foo-bar"] {
-      XCTAssertThrowsError(try DirectoryShare(parseFrom: parseFrom), "--dir=\"\(parseFrom)\"")
+      XCTAssertThrowsError(try DirectoryShare(parseFrom: parseFrom), "--dir=\"\(parseFrom)\"") { error in
+        XCTAssertEqual(
+          (error as? ValidationError)?.message,
+          "--dir requires a path, e.g. --dir=build:/Users/admin/build"
+        )
+      }
     }
   }
 
