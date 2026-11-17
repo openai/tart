@@ -23,7 +23,7 @@ struct Create: AsyncParsableCommand {
   var diskFormat: DiskImageFormat = .raw
 
   func validate() throws {
-    if name.contains("/") {
+    if name.isEmpty || name.contains("/") {
       throw ValidationError("<name> should be a local name")
     }
 

@@ -41,7 +41,7 @@ struct Clone: AsyncParsableCommand {
   var pruneLimit = ProcessInfo.processInfo.environment["TART_CLONE_PRUNE_LIMIT"] ?? "100"
 
   func validate() throws {
-    if newName.contains("/") {
+    if newName.isEmpty || newName.contains("/") {
       throw ValidationError("<new-name> should be a local name")
     }
 
