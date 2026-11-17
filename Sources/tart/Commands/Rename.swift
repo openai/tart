@@ -11,9 +11,7 @@ struct Rename: AsyncParsableCommand {
   var newName: String
 
   func validate() throws {
-    if newName.contains("/") {
-      throw ValidationError("<new-name> should be a local name")
-    }
+    try validateLocalName(newName, argument: "<new-name>")
   }
 
   func run() async throws {
