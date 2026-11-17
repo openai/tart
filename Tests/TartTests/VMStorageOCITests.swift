@@ -508,11 +508,13 @@ final class VMStorageOCITests: XCTestCase {
   func testPruningCachedImageRemovesItsDanglingTag() throws {
     try withTemporaryTartHome {
       let storage = try VMStorageOCI()
-      let pruned = try createStandaloneRecord(digest: "sha256:" + String(repeating: "a", count: 64), in: storage)
-      let retained = try createStandaloneRecord(digest: "sha256:" + String(repeating: "b", count: 64), in: storage)
       let prunedTag = RemoteName(host: "example.com", namespace: "org/image", reference: Reference(tag: "old"))
       let retainedTag = RemoteName(host: "example.com", namespace: "org/image", reference: Reference(tag: "new"))
+      // link() runs gc(), which removes digest records that no tag points to,
+      // so tag each record before creating the next one.
+      let pruned = try createStandaloneRecord(digest: "sha256:" + String(repeating: "a", count: 64), in: storage)
       try storage.link(from: prunedTag, to: pruned.name)
+      let retained = try createStandaloneRecord(digest: "sha256:" + String(repeating: "b", count: 64), in: storage)
       try storage.link(from: retainedTag, to: retained.name)
 
       let now = Date()
