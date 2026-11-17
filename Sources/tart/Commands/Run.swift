@@ -238,6 +238,13 @@ struct Run: AsyncParsableCommand {
   """, valueName: "comma-separated CIDRs"))
   var netSoftnetBlock: String?
 
+  @Option(help: ArgumentHelp("Comma-separated private IPv4 CIDRs from which Softnet allocates the guest subnet", discussion: """
+  Restricts Softnet's guest /29 allocation to address space reserved by the operator. Softnet still skips candidates that overlap subnets configured on host interfaces.
+
+  Implies --net-softnet.
+  """, valueName: "comma-separated CIDRs"))
+  var netSoftnetSubnetPool: String?
+
   @Option(help: ArgumentHelp("Connected Unix stream socket file descriptor to use for the Softnet control channel (e.g. --net-softnet-control-fd=3)", discussion: """
   This option enables the Softnet control channel on an inherited Unix stream socket. It can be used to dynamically replace Softnet allow and block lists while the VM is running.
 
@@ -336,7 +343,7 @@ struct Run: AsyncParsableCommand {
     }
 
     // Automatically enable --net-softnet when any of its related options are specified
-    if netSoftnetAllow != nil || netSoftnetBlock != nil || netSoftnetExpose != nil || netSoftnetControlFd != nil {
+    if netSoftnetAllow != nil || netSoftnetBlock != nil || netSoftnetSubnetPool != nil || netSoftnetExpose != nil || netSoftnetControlFd != nil {
       netSoftnet = true
     }
 
@@ -731,6 +738,10 @@ struct Run: AsyncParsableCommand {
 
     if let netSoftnetBlock = netSoftnetBlock {
       softnetExtraArguments += ["--block", netSoftnetBlock]
+    }
+
+    if let netSoftnetSubnetPool = netSoftnetSubnetPool {
+      softnetExtraArguments += ["--subnet-pool", netSoftnetSubnetPool]
     }
 
     if let netSoftnetExpose = netSoftnetExpose {
