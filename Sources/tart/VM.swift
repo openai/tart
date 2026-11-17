@@ -313,7 +313,17 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
 
   @MainActor
   private func stop() async throws {
-    try await self.virtualMachine.stop()
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+      virtualMachine.stop { error in
+        if let error {
+          continuation.resume(throwing: error)
+        } else {
+          continuation.resume()
+        }
+      }
+      // Certification is irrelevant once we're stopping, and can hold up device teardown.
+      try? VMIdentityStop.interrupt(virtualMachine)
+    }
   }
 
   static func craftConfiguration(
