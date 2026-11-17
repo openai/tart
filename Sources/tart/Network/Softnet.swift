@@ -35,7 +35,9 @@ class Softnet: Network {
 
     let ret = socketpair(AF_UNIX, SOCK_DGRAM, 0, fds)
     if ret != 0 {
-      throw SoftnetError.InitializationFailed(why: "socketpair() failed with exit code \(ret)")
+      let details = Errno(rawValue: CInt(errno))
+
+      throw SoftnetError.InitializationFailed(why: "socketpair() failed: \(details)")
     }
 
     vmFD = fds[0]
@@ -133,13 +135,17 @@ class Softnet: Network {
     var receiveBufferSize = 4 * sizeBytes
     var ret = setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &receiveBufferSize, option_len)
     if ret != 0 {
-      throw SoftnetError.InitializationFailed(why: "setsockopt(SO_RCVBUF) returned \(ret)")
+      let details = Errno(rawValue: CInt(errno))
+
+      throw SoftnetError.InitializationFailed(why: "setsockopt(SO_RCVBUF) failed: \(details)")
     }
 
     var sendBufferSize = sizeBytes
     ret = setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sendBufferSize, option_len)
     if ret != 0 {
-      throw SoftnetError.InitializationFailed(why: "setsockopt(SO_SNDBUF) returned \(ret)")
+      let details = Errno(rawValue: CInt(errno))
+
+      throw SoftnetError.InitializationFailed(why: "setsockopt(SO_SNDBUF) failed: \(details)")
     }
   }
 
