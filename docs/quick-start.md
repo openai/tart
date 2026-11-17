@@ -188,6 +188,19 @@ The directory we've mounted above will be accessible from the `/Volumes/My Share
 
 Note: to use the directory mounting feature, the guest VM needs to run macOS 13.0 (Ventura) or newer.
 
+??? warning "Full filesystem sync on macOS shared directories"
+    macOS guest directories shared with `--dir` use Apple VirtioFS.
+    On some macOS versions, `fcntl(F_FULLFSYNC)` on a shared file fails with
+    `ENOTTY` (`Inappropriate ioctl for device`), even when ordinary `fsync`
+    succeeds. This can prevent tools such as `mise` from writing lockfiles
+    or other state to a shared directory.
+
+    If an application encounters this error, run it using the guest's local
+    APFS filesystem instead (for example, a working copy under the guest
+    home directory). Copy the necessary files between host and guest
+    when needed, rather than storing the affected writable state on the
+    VirtioFS mount. See [issue #1408](https://github.com/openai/tart/issues/1408).
+
 ??? tip "Changing mount location"
     It is possible to remount the directories after a virtual machine is started by running the following commands:
 
