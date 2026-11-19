@@ -404,6 +404,49 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testSetDoesNotSaveConfigWhenDiskResizeFails() async throws {
+    try await withTemporaryTartHome {
+      let vmDir = try makeStandaloneVM(named: "shrink", diskContents: "")
+      let originalCPUCount = try VMConfig(fromURL: vmDir.configURL).cpuCount
+
+      // Make the (sparse) disk 2 GB so that resizing it to 1 GB is a shrink
+      let diskFileHandle = try FileHandle(forWritingTo: vmDir.diskURL)
+      try diskFileHandle.truncate(atOffset: 2 * 1000 * 1000 * 1000)
+      try diskFileHandle.close()
+
+      let command = try Set.parseAsRoot(["shrink", "--cpu", "4", "--disk-size", "1"]) as! Set
+
+      do {
+        try await command.run()
+        XCTFail("expected shrinking the disk to be rejected")
+      } catch RuntimeError.InvalidDiskSize(let message) {
+        XCTAssertTrue(message.contains("should be larger than the current disk size"))
+      }
+
+      XCTAssertEqual(try VMConfig(fromURL: vmDir.configURL).cpuCount, originalCPUCount)
+    }
+  }
+
+  func testSetDoesNotSaveConfigWhenDiskReplacementFails() async throws {
+    try await withTemporaryTartHome {
+      let vmDir = try makeStandaloneVM(named: "missing-disk", diskContents: "disk")
+      let originalCPUCount = try VMConfig(fromURL: vmDir.configURL).cpuCount
+      let missingDiskURL = try temporaryDirectory().appendingPathComponent("missing.img")
+
+      let command = try Set.parseAsRoot(["missing-disk", "--cpu", "4", "--disk", missingDiskURL.path]) as! Set
+
+      do {
+        try await command.run()
+        XCTFail("expected replacing the disk with a missing file to fail")
+      } catch {
+        // expected
+      }
+
+      XCTAssertEqual(try VMConfig(fromURL: vmDir.configURL).cpuCount, originalCPUCount)
+      XCTAssertEqual(try Data(contentsOf: vmDir.diskURL), Data("disk".utf8))
+    }
+  }
+
   func testRemoteAdditionalDiskRetainsTemporaryBackingFileLock() throws {
     try withTemporaryTartHome {
       let storage = try VMStorageOCI()
