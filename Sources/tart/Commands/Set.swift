@@ -96,8 +96,9 @@ struct Set: AsyncParsableCommand {
       }
     #endif
 
-    try vmConfig.save(toURL: vmDir.configURL)
-
+    // Apply disk changes before saving the configuration, so that a failed
+    // disk replacement or resize (e.g. a missing --disk path or an attempt
+    // to shrink the disk) doesn't leave the other requested changes applied.
     if let disk = disk {
       let temporaryDiskURL = try Config().tartTmpDir.appendingPathComponent("set-disk-\(UUID().uuidString)")
 
@@ -109,6 +110,8 @@ struct Set: AsyncParsableCommand {
     if diskSize != nil {
       try vmDir.resizeDisk(diskSize!)
     }
+
+    try vmConfig.save(toURL: vmDir.configURL)
   }
 }
 
