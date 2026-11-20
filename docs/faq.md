@@ -77,6 +77,17 @@ Note: that accessing host is only possible with the default NAT network. If you 
 [Softnet](https://github.com/openai/softnet) (via `tart run --net-softnet <VM NAME>)`, then the network isolation
 is stricter and it's not possible to access the host.
 
+## Host-only networking
+
+Starting from macOS 26 (Tahoe), you can restrict a VM to a host-only network with the `--net-host` flag:
+
+```shell
+tart run --net-host <VM NAME>
+```
+
+This uses `Virtualization.Framework`'s `VMNET_HOST_MODE`, which gives the VM a private network shared only with the
+host, without any access to the wider network. It is mutually exclusive with `--net-bridged` and `--net-softnet`.
+
 ## Avoiding the "Local Network" permission pop-up
 
 Starting from macOS 15 (Sequoia), a GUI "Local Network" permission pop-up might appear when Tart is used by another tool that needs to connect to a VM over a private IPv4 network, for example [Packer](https://developer.hashicorp.com/packer/integrations/cirruslabs/tart/latest/components/builder/tart).
