@@ -97,7 +97,7 @@ struct UnsupportedHostOSError: Error, CustomStringConvertible {
           heightInPixels: vmConfig.display.height,
           // A reasonable guess according to Apple's documentation[1]
           // [1]: https://developer.apple.com/documentation/coregraphics/1456599-cgdisplayscreensize
-          pixelsPerInch: 72
+          pixelsPerInch: vmConfig.display.pixelsPerInch ?? 72
         )
       ]
 

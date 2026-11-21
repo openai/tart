@@ -17,6 +17,9 @@ struct Set: AsyncParsableCommand {
   @Option(help: "VM display resolution in a format of WIDTHxHEIGHT[pt|px]. For example, 1200x800, 1200x800pt or 1920x1080px. Units are treated as hints and default to \"pt\" (points) for macOS VMs and \"px\" (pixels) for Linux VMs when not specified.")
   var display: VMDisplayConfig?
 
+  @Option(help: "VM display pixel density in pixels per inch for macOS VMs, defaults to 72. Requires a display resolution in pixels (\"px\").")
+  var displayPPI: UInt16?
+
   @Flag(inversion: .prefixedNo, help: ArgumentHelp("Whether to automatically reconfigure the VM's display to fit the window"))
   var displayRefit: Bool? = nil
 
@@ -72,6 +75,19 @@ struct Set: AsyncParsableCommand {
         vmConfig.display.height = display.height
       }
       vmConfig.display.unit = display.unit
+      if display.unit != .pixel {
+        vmConfig.display.pixelsPerInch = nil
+      }
+    }
+
+    if let displayPPI = displayPPI {
+      if displayPPI == 0 {
+        throw ValidationError("--display-ppi cannot be less than 1")
+      }
+      if vmConfig.os != .darwin || vmConfig.display.unit != .pixel {
+        throw ValidationError("--display-ppi can only be used with macOS VMs with a display resolution in pixels")
+      }
+      vmConfig.display.pixelsPerInch = Int(displayPPI)
     }
 
     if let displayRefit = displayRefit {

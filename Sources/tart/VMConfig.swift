@@ -44,6 +44,7 @@ struct VMDisplayConfig: Codable, Equatable {
   var width: Int = 1024
   var height: Int = 768
   var unit: Unit?
+  var pixelsPerInch: Int?
 }
 
 extension VMDisplayConfig: CustomStringConvertible {
