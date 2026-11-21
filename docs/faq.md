@@ -319,3 +319,17 @@ diskutil apfs resizeContainer disk0s2 0
 ```
 
 Now, you can shut down and `tart run` as you'd normally do.
+
+## HiDPI (Retina) display on a host without a Retina screen
+
+A macOS VM display configured in points takes its pixel density from the host's main screen, so on a host with a non-Retina (1x) screen the guest offers no HiDPI modes.
+
+To get HiDPI modes regardless of the host's screen, configure the display in pixels and set its pixel density:
+
+```shell
+tart set my-vm --display 2880x1800px --display-ppi 144
+```
+
+macOS offers HiDPI modes starting from 144 pixels per inch, twice the default of 72. A guest that has already saved a display mode may keep using it until the mode is changed in the guest.
+
+When running with a window, display refit resizes the display and overrides its pixel density, so turn it off with `tart set my-vm --no-display-refit` or use `tart run --no-graphics`.

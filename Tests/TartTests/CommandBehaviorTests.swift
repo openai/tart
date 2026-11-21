@@ -404,6 +404,49 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testSetDisplayPPIRejectsUnsupportedDisplayBeforeSavingConfig() async throws {
+    try await withTemporaryTartHome {
+      let vmDir = try makeStandaloneVM(named: "display-ppi", diskContents: "disk")
+
+      for (arguments, message) in [
+        (["--display-ppi", "0"], "--display-ppi cannot be less than 1"),
+        (["--display-ppi", "144"], "--display-ppi can only be used with macOS VMs with a display resolution in pixels"),
+        (["--display", "2880x1800px", "--display-ppi", "144"], "--display-ppi can only be used with macOS VMs with a display resolution in pixels"),
+      ] {
+        let command = try Set.parseAsRoot(["display-ppi", "--cpu", "4"] + arguments) as! Set
+
+        do {
+          try await command.run()
+          XCTFail("expected \(arguments) to be rejected")
+        } catch let error as ValidationError {
+          XCTAssertEqual(error.message, message)
+        }
+
+        let unchangedConfig = try VMConfig(fromURL: vmDir.configURL)
+        XCTAssertEqual(unchangedConfig.cpuCount, config().cpuCount)
+        XCTAssertEqual(unchangedConfig.display, VMDisplayConfig())
+      }
+    }
+  }
+
+  func testSetDisplayNotInPixelsResetsDisplayPPI() async throws {
+    try await withTemporaryTartHome {
+      let vmDir = try makeStandaloneVM(named: "display-ppi", diskContents: "disk")
+      var vmConfig = try VMConfig(fromURL: vmDir.configURL)
+      vmConfig.display = VMDisplayConfig(width: 2880, height: 1800, unit: .pixel, pixelsPerInch: 144)
+      try vmConfig.save(toURL: vmDir.configURL)
+
+      try await (try Set.parseAsRoot(["display-ppi", "--cpu", "4"]) as! Set).run()
+      XCTAssertEqual(try VMConfig(fromURL: vmDir.configURL).display.pixelsPerInch, 144)
+
+      try await (try Set.parseAsRoot(["display-ppi", "--display", "1920x1200px"]) as! Set).run()
+      XCTAssertEqual(try VMConfig(fromURL: vmDir.configURL).display.pixelsPerInch, 144)
+
+      try await (try Set.parseAsRoot(["display-ppi", "--display", "1440x900pt"]) as! Set).run()
+      XCTAssertNil(try VMConfig(fromURL: vmDir.configURL).display.pixelsPerInch)
+    }
+  }
+
   func testRemoteAdditionalDiskRetainsTemporaryBackingFileLock() throws {
     try withTemporaryTartHome {
       let storage = try VMStorageOCI()
