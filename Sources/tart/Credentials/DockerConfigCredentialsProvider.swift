@@ -79,10 +79,11 @@ struct DockerConfig: Codable {
       return nil
     }
 
+    if let helperProgram = credHelpers[host] {
+      return helperProgram
+    }
+
     for (hostPattern, helperProgram) in credHelpers {
-      if (hostPattern == host) {
-        return helperProgram
-      }
       let compiledPattern = try? Regex(hostPattern)
       if (try compiledPattern?.wholeMatch(in: host) != nil) {
         return helperProgram
