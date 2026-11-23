@@ -22,6 +22,27 @@ final class DockerConfigTests: XCTestCase {
     XCTAssertEqual(credentials.1, "token:with:colons")
   }
 
+  func testExactHelperTakesPrecedenceOverWildcard() throws {
+    let exactHelpers = [
+      "ghcr.io": "github",
+      "gcr.io": "gcloud",
+      "quay.io": "quay",
+      "docker.io": "dockerhub",
+      "nvcr.io": "nvidia",
+      "public.ecr.aws": "ecr-public",
+      "registry.gitlab.com": "gitlab",
+      "localhost:5000": "local",
+    ]
+    var credHelpers = exactHelpers
+    credHelpers[".*"] = "default-helper"
+    let config = DockerConfig(credHelpers: credHelpers)
+
+    for (host, helper) in exactHelpers {
+      XCTAssertEqual(try config.findCredHelper(host: host), helper, host)
+    }
+    XCTAssertEqual(try config.findCredHelper(host: "other.example.com"), "default-helper")
+  }
+
   func testHelperStderrIsNotParsed() throws {
     let helperDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: helperDir, withIntermediateDirectories: true)
