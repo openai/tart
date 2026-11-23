@@ -36,7 +36,10 @@ func resolveBinaryPath(_ name: String) -> URL? {
     let url = URL(fileURLWithPath: String(pathComponent))
       .appendingPathComponent(name, isDirectory: false)
 
-    if FileManager.default.fileExists(atPath: url.path) {
+    var isDirectory: ObjCBool = false
+    if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+      && !isDirectory.boolValue
+      && FileManager.default.isExecutableFile(atPath: url.path) {
       return url
     }
   }
