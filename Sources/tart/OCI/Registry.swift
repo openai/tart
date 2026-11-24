@@ -6,6 +6,7 @@ enum RegistryError: Error {
   case MissingLocationHeader
   case AuthFailed(why: String, details: String = "")
   case MalformedHeader(why: String)
+  case ManifestDigestMismatch(expected: String, actual: String)
 }
 
 enum HTTPMethod: String {
@@ -210,6 +211,15 @@ class Registry {
     if response.statusCode != HTTPCode.Ok.rawValue {
       throw RegistryError.UnexpectedHTTPStatusCode(when: "pulling manifest", code: response.statusCode,
                                                    details: data.asTextPreview())
+    }
+
+    // A manifest requested by digest must be the one that was asked for
+    if reference.starts(with: "sha256:") {
+      let actualDigest = Digest.hash(data)
+
+      if actualDigest != reference {
+        throw RegistryError.ManifestDigestMismatch(expected: reference, actual: actualDigest)
+      }
     }
 
     let manifest = try OCIManifest(fromJSON: data)
