@@ -144,6 +144,12 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testRunRejectsSerialWithSerialPath() {
+    XCTAssertThrowsError(try Run.parse(["vm", "--serial", "--serial-path", "/dev/null"])) { error in
+      XCTAssertEqual(Run.message(for: error), "--serial and --serial-path are mutually exclusive")
+    }
+  }
+
   func testNoUSBAccessoriesDoesNotEnableSuspendable() throws {
     try withTemporaryTartHome {
       let vmDir = try VMStorageLocal().create("no-usb-accessories")

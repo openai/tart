@@ -331,6 +331,10 @@ struct Run: AsyncParsableCommand {
   #endif
 
   mutating func validate() throws {
+    if serial && serialPath != nil {
+      throw ValidationError("--serial and --serial-path are mutually exclusive")
+    }
+
     if vnc && vncExperimental {
       throw ValidationError("--vnc and --vnc-experimental are mutually exclusive")
     }
