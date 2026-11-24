@@ -27,6 +27,10 @@ struct Prune: AsyncParsableCommand {
   var gc: Bool = false
 
   mutating func validate() throws {
+    if !["caches", "vms"].contains(entries) {
+      throw ValidationError("unsupported --entries value, please specify either \"caches\" or \"vms\"")
+    }
+
     // --cache-budget deprecation logic
     if let cacheBudget = cacheBudget {
       fputs("--cache-budget is deprecated, please use --space-budget\n", stderr)

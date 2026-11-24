@@ -230,6 +230,11 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testPruneRejectsUnsupportedEntries() {
+    XCTAssertThrowsError(try Prune.parse(["--entries", "vm", "--older-than", "7"]))
+    XCTAssertNoThrow(try Prune.parse(["--entries", "vms", "--older-than", "7"]))
+  }
+
   func testCloneRejectsExistingDestinationUnlessOverwriteIsRequested() async throws {
     try await withTemporaryTartHome {
       let source = try makeStandaloneVM(named: "source", diskContents: "source")
