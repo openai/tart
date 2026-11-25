@@ -212,6 +212,17 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testFQNReportsMissingRemoteImage() async throws {
+    try await withTemporaryTartHome {
+      do {
+        try await FQN.parse(["example.com/org/vm:latest"]).run()
+        XCTFail("expected a remote image that isn't cached to be reported as missing")
+      } catch let error as RuntimeError {
+        XCTAssertEqual(error.description, "the specified VM \"example.com/org/vm:latest\" does not exist")
+      }
+    }
+  }
+
   func testClonePruneLimitFromEnvironment() throws {
     let key = "TART_CLONE_PRUNE_LIMIT"
     let previous = ProcessInfo.processInfo.environment[key]
