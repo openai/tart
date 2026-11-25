@@ -22,6 +22,32 @@ final class DockerConfigTests: XCTestCase {
     XCTAssertEqual(credentials.1, "token:with:colons")
   }
 
+  func testDockerHubAuthUnderIndexServerAddress() throws {
+    let auth = Data("user:password".utf8).base64EncodedString()
+    let config = DockerConfig(auths: ["https://index.docker.io/v1/": DockerAuthConfig(auth: auth)])
+
+    for host in ["docker.io", "Docker.IO"] {
+      let credentials = try XCTUnwrap(config.findAuth(host: host)?.decodeCredentials(), host)
+
+      XCTAssertEqual(credentials.0, "user")
+      XCTAssertEqual(credentials.1, "password")
+    }
+
+    XCTAssertNil(config.findAuth(host: "ghcr.io"))
+    XCTAssertNil(config.findAuth(host: "index.docker.io"))
+  }
+
+  func testExactAuthTakesPrecedence() throws {
+    let exactAuth = DockerAuthConfig(auth: Data("exact:password".utf8).base64EncodedString())
+    let indexAuth = DockerAuthConfig(auth: Data("index:password".utf8).base64EncodedString())
+    let config = DockerConfig(auths: [
+      "docker.io": exactAuth,
+      "https://index.docker.io/v1/": indexAuth,
+    ])
+
+    XCTAssertEqual(config.findAuth(host: "docker.io")?.decodeCredentials()?.0, "exact")
+  }
+
   func testHelperStderrIsNotParsed() throws {
     let helperDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: helperDir, withIntermediateDirectories: true)
