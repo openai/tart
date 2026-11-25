@@ -1,7 +1,7 @@
 import Foundation
 import Network
 
-enum LeasesError: Error {
+enum LeasesError: Error, CustomStringConvertible {
   case UnexpectedFormat(name: String = "unexpected DHCPD leases file format", message: String, line: Int)
   case Truncated(name: String = "truncated DHCPD leases file")
 
