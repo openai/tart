@@ -54,7 +54,7 @@ struct Login: AsyncParsableCommand {
 
       do {
         try await registry.ping()
-      } catch {
+      } catch let error as RegistryError {
         throw RuntimeError.InvalidCredentials("invalid credentials: \(error)")
       }
     }
