@@ -81,4 +81,19 @@ final class VMConfigTests: XCTestCase {
       XCTAssertEqual(context.codingPath.last?.stringValue, "macAddress")
     }
   }
+
+  #if arch(arm64)
+    func testUnsupportedHardwareModelError() throws {
+      let config = VMConfig(platform: Linux(), cpuCountMin: 2, memorySizeMin: 1024 * 1024 * 1024)
+      var configJSONObject = try XCTUnwrap(JSONSerialization.jsonObject(with: try config.toJSON()) as? [String: Any])
+      configJSONObject["os"] = "darwin"
+      configJSONObject["ecid"] = VZMacMachineIdentifier().dataRepresentation.base64EncodedString()
+      configJSONObject["hardwareModel"] = Data([0]).base64EncodedString()
+      let configData = try JSONSerialization.data(withJSONObject: configJSONObject)
+
+      XCTAssertThrowsError(try VMConfig(fromJSON: configData)) { error in
+        XCTAssertEqual("\(error)", "host macOS version is outdated to run this virtual machine")
+      }
+    }
+  #endif
 }

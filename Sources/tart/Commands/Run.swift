@@ -499,11 +499,15 @@ struct Run: AsyncParsableCommand {
     let additionalDisks = try additionalDisks()
     defer { withExtendedLifetime(additionalDisks) {} }
 
+    // Same for the temporary directories that remote --dir archives are unarchived into.
+    var directoryShareLocks: [FileLock] = []
+    defer { withExtendedLifetime(directoryShareLocks) {} }
+
     vm = try VM(
       vmDir: vmDir,
       network: userSpecifiedNetwork(vmDir: vmDir) ?? NetworkShared(),
       additionalStorageDevices: additionalDisks.map(\.configuration),
-      directorySharingDevices: directoryShares() + rosettaDirectoryShare(),
+      directorySharingDevices: directoryShares(retaining: &directoryShareLocks) + rosettaDirectoryShare(),
       serialPorts: serialPorts,
       suspendable: suspendable,
       nested: nested,
@@ -787,7 +791,7 @@ struct Run: AsyncParsableCommand {
     }
   }
 
-  func directoryShares() throws -> [VZDirectorySharingDeviceConfiguration] {
+  func directoryShares(retaining locks: inout [FileLock]) throws -> [VZDirectorySharingDeviceConfiguration] {
     if dir.isEmpty {
       return []
     }
@@ -813,13 +817,13 @@ struct Run: AsyncParsableCommand {
       }
       if directoryShares.count == 1 && directoryShares.first!.name == nil {
         let directoryShare = directoryShares.first!
-        let singleDirectoryShare = VZSingleDirectoryShare(directory: try directoryShare.createConfiguration())
+        let singleDirectoryShare = VZSingleDirectoryShare(directory: try directoryShare.createConfiguration(retaining: &locks))
         sharingDevice.share = singleDirectoryShare
       } else if !allNamedShares {
         throw ValidationError("invalid --dir syntax: for multiple directory shares each one of them should be named")
       } else {
         var directories: [String : VZSharedDirectory] = Dictionary()
-        try directoryShares.forEach { directories[$0.name!] = try $0.createConfiguration() }
+        try directoryShares.forEach { directories[$0.name!] = try $0.createConfiguration(retaining: &locks) }
         sharingDevice.share = VZMultipleDirectoryShare(directories: directories)
       }
 
@@ -1013,6 +1017,10 @@ struct AdditionalDisk {
   init(parseFrom: String) throws {
     let (diskPath, readOnly, syncModeRaw, cachingModeRaw) = Self.parseOptions(parseFrom)
 
+    if diskPath.isEmpty {
+      throw ValidationError("--disk requires a path or URL, e.g. --disk=/path/to/disk.img")
+    }
+
     self = try Self.craft(
       diskPath,
       readOnly: readOnly,
@@ -1147,7 +1155,7 @@ struct AdditionalDisk {
   static func parseOptions(_ parseFrom: String) -> (String, Bool, String, String) {
     var arguments = parseFrom.split(separator: ":")
 
-    let options = DiskOptions(String(arguments.last!))
+    let options = DiskOptions(String(arguments.last ?? ""))
     if options.foundAtLeastOneOption {
       arguments.removeLast()
     }
@@ -1270,6 +1278,10 @@ struct DirectoryShare {
     // Consume options
     (self.readOnly, self.mountTag, parseFrom) = Self.parseOptions(parseFrom)
 
+    if parseFrom.split(separator: ":").isEmpty {
+      throw ValidationError("--dir requires a path, e.g. --dir=build:/Users/admin/build")
+    }
+
     // Special case for URLs
     if parseFrom.hasPrefix("http:") || parseFrom.hasPrefix("https:") {
       self.name = nil
@@ -1291,7 +1303,7 @@ struct DirectoryShare {
 
   static func parseOptions(_ parseFrom: String) -> (Bool, String, String) {
     var arguments = parseFrom.split(separator: ":")
-    let options = arguments.last!.split(separator: ",")
+    let options = arguments.last?.split(separator: ",") ?? []
 
     var readOnly: Bool = false
     var mountTag: String = VZVirtioFileSystemDeviceConfiguration.macOSGuestAutomountTag
@@ -1318,7 +1330,7 @@ struct DirectoryShare {
     return (readOnly, mountTag, arguments.joined(separator: ":"))
   }
 
-  func createConfiguration() throws -> VZSharedDirectory {
+  func createConfiguration(retaining locks: inout [FileLock]) throws -> VZSharedDirectory {
     if (path.isFileURL) {
       return VZSharedDirectory(url: path, readOnly: readOnly)
     }
@@ -1360,6 +1372,7 @@ struct DirectoryShare {
     try FileManager.default.createDirectory(atPath: temporaryLocation.path, withIntermediateDirectories: true)
     let lock = try FileLock(lockURL: temporaryLocation)
     try lock.lock()
+    locks.append(lock)
 
     guard let executableURL = resolveBinaryPath("tar") else {
       throw ValidationError("tar not found in PATH")

@@ -8,8 +8,6 @@ copyright: © OpenAI 2022-present
 site_description: >
   Tart is a virtualization toolset to build, run and manage macOS and Linux virtual machines (VMs) on Apple Silicon.
 
-remote_branch: main
-
 theme:
   name: 'material'
   custom_dir: 'docs/theme'

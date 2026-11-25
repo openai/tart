@@ -2,7 +2,7 @@ import Virtualization
 
 struct UnsupportedHostOSError: Error, CustomStringConvertible {
   var description: String {
-    "error: host macOS version is outdated to run this virtual machine"
+    "host macOS version is outdated to run this virtual machine"
   }
 }
 

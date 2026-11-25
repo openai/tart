@@ -223,6 +223,24 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testClonePruneLimitFromEnvironment() throws {
+    let key = "TART_CLONE_PRUNE_LIMIT"
+    let previous = ProcessInfo.processInfo.environment[key]
+    defer { restoreEnvironment(key, to: previous) }
+
+    let args = ["source", "destination"]
+    unsetenv(key)
+    XCTAssertEqual(try Clone.parse(args).pruneLimitBytes(), 100 << 30)
+    setenv(key, "20", 1)
+    XCTAssertEqual(try Clone.parse(args).pruneLimitBytes(), 20 << 30)
+
+    for invalid in ["invalid", String(UInt.max)] {
+      setenv(key, invalid, 1)
+      XCTAssertThrowsError(try Clone.parse(args).pruneLimitBytes())
+      XCTAssertEqual(try Clone.parse(args + ["--prune-limit", "0"]).pruneLimitBytes(), 0)
+    }
+  }
+
   func testCloneRejectsExistingDestinationUnlessOverwriteIsRequested() async throws {
     try await withTemporaryTartHome {
       let source = try makeStandaloneVM(named: "source", diskContents: "source")
@@ -441,6 +459,17 @@ final class CommandBehaviorTests: XCTestCase {
       let attachment = try XCTUnwrap(additionalDisk.configuration.attachment as? VZDiskImageStorageDeviceAttachment)
       XCTAssertEqual(attachment.cachingMode, .cached)
       XCTAssertEqual(attachment.synchronizationMode, .none)
+    }
+  }
+
+  func testAdditionalDiskWithoutPathIsRejected() throws {
+    for parseFrom in ["", ":", "ro", ":ro"] {
+      XCTAssertThrowsError(try AdditionalDisk(parseFrom: parseFrom), "--disk=\"\(parseFrom)\"") { error in
+        XCTAssertEqual(
+          (error as? ValidationError)?.message,
+          "--disk requires a path or URL, e.g. --disk=/path/to/disk.img"
+        )
+      }
     }
   }
 

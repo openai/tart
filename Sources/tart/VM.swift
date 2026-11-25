@@ -15,7 +15,7 @@ struct UnsupportedOSError: Error, CustomStringConvertible {
   let description: String
 
   init(_ what: String, _ plural: String, _ requires: String = "running macOS 13.0 (Ventura) or newer") {
-    description = "error: \(what) \(plural) only supported on hosts \(requires)"
+    description = "\(what) \(plural) only supported on hosts \(requires)"
   }
 }
 
@@ -262,11 +262,11 @@ class VM: NSObject, VZVirtualMachineDelegate, ObservableObject {
   @MainActor
   func connect(toPort: UInt32) async throws -> VZVirtioSocketConnection {
     guard let socketDevice = virtualMachine.socketDevices.first else {
-      throw RuntimeError.VMSocketFailed(toPort, ", VM has no socket devices configured")
+      throw RuntimeError.VMSocketFailed(toPort, "VM has no socket devices configured")
     }
 
     guard let virtioSocketDevice = socketDevice as? VZVirtioSocketDevice else {
-      throw RuntimeError.VMSocketFailed(toPort, ", expected VM's first socket device to have a type of VZVirtioSocketDevice, got \(type(of: socketDevice)) instead")
+      throw RuntimeError.VMSocketFailed(toPort, "expected VM's first socket device to have a type of VZVirtioSocketDevice, got \(type(of: socketDevice)) instead")
     }
 
     return try await virtioSocketDevice.connect(toPort: toPort)
