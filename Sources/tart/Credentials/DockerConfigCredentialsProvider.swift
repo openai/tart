@@ -10,7 +10,7 @@ class DockerConfigCredentialsProvider: CredentialsProvider {
     }
     let config = try JSONDecoder().decode(DockerConfig.self, from: Data(contentsOf: dockerConfigURL))
 
-    if let credentialsFromAuth = config.auths?[host]?.decodeCredentials() {
+    if let credentialsFromAuth = config.findAuth(host: host)?.decodeCredentials() {
       return credentialsFromAuth
     }
     if let helperProgram = try config.findCredHelper(host: host) {
@@ -70,6 +70,26 @@ class DockerConfigCredentialsProvider: CredentialsProvider {
 struct DockerConfig: Codable {
   var auths: Dictionary<String, DockerAuthConfig>? = Dictionary()
   var credHelpers: Dictionary<String, String>? = Dictionary()
+
+  // Docker stores Docker Hub credentials under its index server address,
+  // even when logging in with "docker login docker.io"
+  static let dockerHubAuthKey = "https://index.docker.io/v1/"
+
+  func findAuth(host: String) -> DockerAuthConfig? {
+    guard let auths else {
+      return nil
+    }
+
+    if let auth = auths[host] {
+      return auth
+    }
+
+    if host.lowercased() == "docker.io" {
+      return auths[Self.dockerHubAuthKey]
+    }
+
+    return nil
+  }
 
   func findCredHelper(host: String) throws -> String? {
     // Tart supports wildcards in credHelpers
