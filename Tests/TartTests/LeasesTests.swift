@@ -58,4 +58,14 @@ final class LeasesTests: XCTestCase {
 
     XCTAssertEqual(IPv4Address("192.168.64.1"), leases.ResolveMACAddress(macAddress: macAddress))
   }
+
+  func testErrorDescriptions() throws {
+    XCTAssertThrowsError(try Leases("}")) { error in
+      XCTAssertEqual("\(error)", "unexpected DHCPD leases file format on line 1: unexpected lease block end (})")
+    }
+
+    XCTAssertThrowsError(try Leases("{\n  name=debian")) { error in
+      XCTAssertEqual("\(error)", "truncated DHCPD leases file")
+    }
+  }
 }
