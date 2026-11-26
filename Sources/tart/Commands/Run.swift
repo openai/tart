@@ -162,6 +162,17 @@ struct Run: AsyncParsableCommand {
   #endif
   var rosettaTag: String?
 
+  #if arch(arm64)
+    @Flag(name: .customLong("rosetta-cache"), help: ArgumentHelp(
+      "Enable Rosetta translation caching via the default Unix socket",
+      discussion: """
+      Requires --rosetta and a macOS 14 or newer host. Configure the Rosetta
+      translation daemon in the Linux guest as described in Apple's Rosetta guide.
+      """
+    ))
+    var rosettaCache: Bool = false
+  #endif
+
   @Option(help: ArgumentHelp("Additional directory shares with an optional read-only and mount tag options in the form of [name:]path[:options] (e.g. --dir=\"~/src/build\" or --dir=\"~/src/sources:ro\")", discussion: """
   Requires host to be macOS 13.0 (Ventura) or newer. macOS guests must be running macOS 13.0 (Ventura) or newer too.
 
@@ -331,6 +342,17 @@ struct Run: AsyncParsableCommand {
   #endif
 
   mutating func validate() throws {
+    #if arch(arm64)
+      if rosettaCache {
+        guard rosettaTag != nil else {
+          throw ValidationError("--rosetta-cache requires --rosetta")
+        }
+        guard #available(macOS 14, *) else {
+          throw ValidationError("--rosetta-cache requires macOS 14 or newer")
+        }
+      }
+    #endif
+
     if vnc && vncExperimental {
       throw ValidationError("--vnc and --vnc-experimental are mutually exclusive")
     }
@@ -401,6 +423,15 @@ struct Run: AsyncParsableCommand {
         throw ValidationError("--no-trackpad can only be used with macOS VMs")
       }
     }
+
+    #if arch(arm64)
+      if rosettaCache {
+        let config = try VMConfig.init(fromURL: vmDir.configURL)
+        if config.os != .linux {
+          throw ValidationError("--rosetta-cache can only be used with Linux VMs")
+        }
+      }
+    #endif
 
     #if arch(arm64) && compiler(>=6.4)
       if provisioningOpts != nil {
@@ -851,7 +882,11 @@ struct Run: AsyncParsableCommand {
 
       try VZVirtioFileSystemDeviceConfiguration.validateTag(rosettaTag)
       let device = VZVirtioFileSystemDeviceConfiguration(tag: rosettaTag)
-      device.share = try VZLinuxRosettaDirectoryShare()
+      let share = try VZLinuxRosettaDirectoryShare()
+      if rosettaCache, #available(macOS 14, *) {
+        try share.setCachingOptions(.defaultUnixSocket)
+      }
+      device.share = share
 
       return [device]
     #elseif arch(x86_64)
