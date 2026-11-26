@@ -160,6 +160,29 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  #if arch(arm64)
+    func testRosettaCachingIsOptIn() throws {
+      guard #available(macOS 14, *) else {
+        throw XCTSkip("Rosetta caching requires macOS 14 or newer")
+      }
+      try withTemporaryTartHome {
+        _ = try makeStandaloneVM(named: "linux-vm", diskContents: "disk")
+        let regular = try Run.parseAsRoot(["linux-vm", "--rosetta", "rosetta"]) as! Run
+        XCTAssertFalse(regular.rosettaCache)
+
+        let cached = try Run.parseAsRoot(["linux-vm", "--rosetta", "rosetta", "--rosetta-cache"]) as! Run
+        XCTAssertTrue(cached.rosettaCache)
+        XCTAssertEqual(cached.rosettaTag, "rosetta")
+      }
+    }
+
+    func testRosettaCachingRequiresRosettaShare() {
+      XCTAssertThrowsError(try Run.parse(["vm", "--rosetta-cache"])) { error in
+        XCTAssertTrue("\(error)".contains("--rosetta-cache requires --rosetta"))
+      }
+    }
+  #endif
+
   func testPushRejectsInvalidConcurrencyAndChunkSize() {
     XCTAssertThrowsError(try Push.parse(["vm", "example.com/org/vm:latest", "--concurrency", "0"]))
     XCTAssertThrowsError(try Push.parse(["vm", "example.com/org/vm:latest", "--chunk-size=-1"]))
