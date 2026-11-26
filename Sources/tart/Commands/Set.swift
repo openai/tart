@@ -36,6 +36,7 @@ struct Set: AsyncParsableCommand {
 
   @Option(help: ArgumentHelp("Resize the VMs disk to the specified size in GB (note that the disk size can only be increased to avoid losing data)",
                              discussion: """
+                             Growing the virtual disk does not guarantee that the guest filesystem grows.
                              See https://tart.run/faq/#disk-resizing for more details.
                              """))
   var diskSize: UInt16?

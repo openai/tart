@@ -255,17 +255,40 @@ overlay adds another ASIF file to validate and assemble at run time.
 
 ## Disk resizing
 
+With the VM stopped, run `tart set --disk-size 128 my-vm` to grow its virtual disk
+to 128 GB. The size reported for the virtual disk and the space available to
+the guest filesystem are separate:
+
+- For a standalone raw disk, Tart extends the disk file.
+- For a standalone ASIF disk, Tart delegates image resizing to macOS
+  `diskutil image resize`.
+- For a stacked disk, Tart grows the private writable overlay using
+  DiskImageKit. The parent layers remain unchanged. The requested size must
+  align to the stack's block size; the VM must not be running or suspended.
+
+Tart does not explicitly relocate the macOS recovery partition or resize the
+guest's APFS container in these code paths. Do not assume that the filesystem
+has grown just because the virtual disk has grown. In particular, a standalone
+ASIF resize and a stacked resize can leave different partition layouts. Inside
+the guest, check both the partition layout (`diskutil list physical` on macOS)
+and available filesystem space (`df -h`) before taking further action. If the
+APFS container already spans the expanded usable space, no manual resizing
+is required.
+
 Disk resizing works on most cloud-ready Linux distributions out-of-the box (e.g. Ubuntu Cloud Images have the `cloud-initramfs-growroot` package installed that runs on boot) and on the rest of the distributions by running the `growpart` or `resize2fs` commands.
 
-For macOS, however, things are a bit more complicated, and you generally have two options: automated and manual resizing.
+For a macOS guest whose APFS container has not grown, there are two options: automated and manual partition resizing.
 
-For the automated option, you can use [Packer](https://www.packer.io/) with the [Packer builder for Tart VMs](https://developer.hashicorp.com/packer/integrations/cirruslabs/tart/latest/components/builder/tart). The latter has two has configuration directives related to the disk resizing behavior:
+For the automated option, you can use [Packer](https://www.packer.io/) with the [Packer builder for Tart VMs](https://developer.hashicorp.com/packer/integrations/cirruslabs/tart/latest/components/builder/tart). The latter has two configuration directives related to the disk resizing behavior. Check the builder's support for your disk format before using them:
 
 * [`disk_size_gb`](https://developer.hashicorp.com/packer/integrations/cirruslabs/tart/latest/components/builder/tart#configuration-reference) — controls the target disk size in gigabytes
 * [`recovery_partition`](https://developer.hashicorp.com/packer/integrations/cirruslabs/tart/latest/components/builder/tart#configuration-reference) — controls what to do with the recovery partition when resizing the disk
     * you can either keep, delete or relocate it to the end of the disk
 
-For the manual approach, you have to remove the recovery partition first, repair the disk and the resize the APFS container.
+The manual procedure below applies when the recovery partition sits between the
+system container and the new free space. It deletes the recovery partition.
+Back up the VM before proceeding, and do not use the example partition
+identifiers unless they match your guest's actual layout.
 
 To do this, first we'll need to identify the primary disk and the APFS containers by running the command below from within a VM:
 
