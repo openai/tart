@@ -81,12 +81,14 @@ struct Push: AsyncParsableCommand {
       let pushedRemoteName: RemoteName
       // If we're pushing a cached remote image, check if it points to an existing registry manifest
       // and if so, only upload manifests (without config, disk and NVRAM) to the user-specified references
-      if let remoteName = try? RemoteName(localName) {
-        pushedRemoteName = try await lightweightPushToRegistry(
-          registry: registry, 
-          remoteName: remoteName,
-          references: references
-        )
+      if let remoteName = try? RemoteName(localName),
+         let lightweightPushedRemoteName = try await lightweightPushToRegistry(
+           registry: registry,
+           remoteName: remoteName,
+           references: references,
+           canFallBackToFullPush: localVMDir.isStandalone
+         ) {
+        pushedRemoteName = lightweightPushedRemoteName
       } else {
         let pushedImage = try await localVMDir.pushToRegistry(
           registry: registry,
@@ -112,11 +114,24 @@ struct Push: AsyncParsableCommand {
     }
   }
 
-  func lightweightPushToRegistry(registry: Registry, remoteName: RemoteName, references: [String]) async throws -> RemoteName {
+  func lightweightPushToRegistry(
+    registry: Registry,
+    remoteName: RemoteName,
+    references: [String],
+    canFallBackToFullPush: Bool
+  ) async throws -> RemoteName? {
     // Is the cached remote image already present in the registry?
     let digest = try VMStorageOCI().digest(remoteName)
 
-    let (remoteManifest, _) = try await registry.pullManifest(reference: digest)
+    let remoteManifest: OCIManifest
+    do {
+      (remoteManifest, _) = try await registry.pullManifest(reference: digest)
+    } catch RegistryError.UnexpectedHTTPStatusCode(_, let code, _)
+              where code == HTTPCode.NotFound.rawValue && canFallBackToFullPush {
+      // The image comes from another registry or repository,
+      // so upload its config, disk and NVRAM instead
+      return nil
+    }
 
     // Overwrite registry's references with the retrieved manifest
     for reference in references {
