@@ -1,4 +1,5 @@
 import ArgumentParser
+import Atomics
 import Darwin
 import Foundation
 import OpenTelemetryApi
@@ -75,9 +76,22 @@ struct Root: AsyncParsableCommand {
       // Every other command is asynchronous and doesn't touch the main thread, so
       // drive it from a detached task and let the Dispatch main queue keep the
       // process alive until the command exits.
-      let task = Task.detached {
-        await runInBackground(command)
+      // Exec temporarily changes inherited open-file status flags. Let SIGTERM
+      // cancel it so its terminal and descriptor cleanup runs before termination.
+      // Other commands keep their existing SIGTERM behavior.
+      let terminationRequested = ManagedAtomic(false)
+      let sigtermSrc = command is Exec ? DispatchSource.makeSignalSource(signal: SIGTERM) : nil
+      if sigtermSrc != nil {
+        signal(SIGTERM, SIG_IGN)
       }
+      let task = Task.detached {
+        await runInBackground(command, terminationRequested: terminationRequested)
+      }
+      sigtermSrc?.setEventHandler {
+        terminationRequested.store(true, ordering: .relaxed)
+        task.cancel()
+      }
+      sigtermSrc?.activate()
 
       // Handle cancellation by Ctrl+C ourselves
       let sigintSrc = DispatchSource.makeSignalSource(signal: SIGINT)
@@ -86,7 +100,9 @@ struct Root: AsyncParsableCommand {
       }
       sigintSrc.activate()
 
-      dispatchMain()
+      withExtendedLifetime((sigintSrc, sigtermSrc)) {
+        dispatchMain()
+      }
     }
   }
 
@@ -108,7 +124,7 @@ struct Root: AsyncParsableCommand {
     Foundation.exit(0)
   }
 
-  private static func runInBackground(_ command: ParsableCommand) async {
+  private static func runInBackground(_ command: ParsableCommand, terminationRequested: ManagedAtomic<Bool>) async {
     let span = startCommandSpan(for: command)
     runGarbageCollection(for: command)
 
@@ -120,12 +136,23 @@ struct Root: AsyncParsableCommand {
         try command.run()
       }
     } catch {
+      terminateIfRequested(terminationRequested)
       handleError(error, span: span)
     }
 
+    terminateIfRequested(terminationRequested)
     span.end()
     OTel.shared.flush()
     Foundation.exit(0)
+  }
+
+  // Preserve SIGTERM's normal exit status after the command has cleaned up.
+  private static func terminateIfRequested(_ requested: ManagedAtomic<Bool>) {
+    if requested.load(ordering: .relaxed) {
+      signal(SIGTERM, SIG_DFL)
+      _ = kill(getpid(), SIGTERM)
+      Foundation.exit(128 + SIGTERM)
+    }
   }
 
   // Create a root span for the command we're about to run.

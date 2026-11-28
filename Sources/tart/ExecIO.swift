@@ -15,12 +15,17 @@ final class ExecIO: @unchecked Sendable {
     do {
       // Snapshot everything before changing any flags, including aliases such
       // as an interactive terminal or stdout/stderr redirected with 2>&1.
-      for original in fileDescriptors {
+      // Validate every original first: dup could otherwise occupy a closed
+      // descriptor that a later iteration mistakes for an original.
+      let originals = try fileDescriptors.map { original in
         let flags = fcntl(original, F_GETFL)
         guard flags >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno)!) }
-        let fd = fcntl(original, F_DUPFD_CLOEXEC, 0)
+        return (fd: original, flags: flags)
+      }
+      for original in originals {
+        let fd = fcntl(original.fd, F_DUPFD_CLOEXEC, 0)
         guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno)!) }
-        descriptors.append((fd, flags))
+        descriptors.append((fd, original.flags))
       }
       for descriptor in descriptors {
         guard fcntl(descriptor.fd, F_SETFL, descriptor.flags | O_NONBLOCK) == 0 else {

@@ -217,7 +217,7 @@ Tart does have an analogue of Anka Controller for managing VMs across a cluster 
 
 In case there's not enough space to fit the newly pulled or cloned VM image, Tart will remove the least recently accessed VMs from OCI cache and `.ipsw` files from IPSW cache until enough free space is available.
 
-The `tart clone` command limits this automatic pruning to 100 GB by default to avoid removing too many cached items. You can change this limit with the `--prune-limit` option (in gigabytes).
+The `tart clone` command limits this automatic pruning to 100 GB by default to avoid removing too many cached items. You can change this limit with the `--prune-limit` option (in gigabytes). Set `TART_CLONE_PRUNE_LIMIT` to change the default for this option.
 
 To disable this functionality, set the `TART_NO_AUTO_PRUNE` environment variable either globally:
 

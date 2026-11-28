@@ -65,8 +65,10 @@ struct Stop: AsyncParsableCommand {
     }
 
     // Seems that VM is still running, proceed with forceful termination
+    //
+    // ESRCH means that the VM has exited on its own since our last check.
     let ret = kill(pid, SIGKILL)
-    if ret != 0 {
+    if ret != 0 && errno != ESRCH {
       let details = Errno(rawValue: CInt(errno))
 
       throw RuntimeError.VMTerminationFailed("failed to forcefully terminate the VM \"\(name)\": \(details)")

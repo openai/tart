@@ -12,6 +12,20 @@ final class ExecIOTests: XCTestCase {
     XCTAssertEqual(execTestFileStatus(fd), flags)
   }
 
+  func testClosedOriginalIsNotMistakenForADuplicate() throws {
+    let pipe = Pipe()
+    let fd = pipe.fileHandleForWriting.fileDescriptor
+    let flags = execTestFileStatus(fd)
+    // The next lowest available descriptor is exactly where the old code
+    // would duplicate the first original, making the closed input look valid.
+    let missing = fcntl(fd, F_DUPFD_CLOEXEC, 0)
+    XCTAssertGreaterThanOrEqual(missing, 0)
+    guard missing >= 0 else { return }
+    _ = close(missing)
+    XCTAssertThrowsError(try ExecIO(fileDescriptors: [fd, missing]))
+    XCTAssertEqual(execTestFileStatus(fd), flags)
+  }
+
   func testAliasedPipeFlagsAreRestoredAfterAllChannelsClose() async throws {
     let pipe = Pipe()
     let fd = pipe.fileHandleForWriting.fileDescriptor

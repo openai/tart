@@ -6,7 +6,7 @@ public protocol Logger {
 }
 
 var defaultLogger: Logger = {
-  if ProcessInfo.processInfo.environment["CI"] != nil {
+  if ProcessInfo.processInfo.environment["CI"] != nil || isatty(STDOUT_FILENO) == 0 {
     return SimpleConsoleLogger()
   } else {
     return InteractiveConsoleLogger()

@@ -95,6 +95,27 @@ final class CommandBehaviorTests: XCTestCase {
     }
   }
 
+  func testASIFResizeFailureIsReportedOnce() throws {
+    try withTemporaryTartHome {
+      let previousPath = try installUnavailableDiskutil(beforeFailure: """
+      if [ "$2" = info ]; then
+        echo '<plist version="1.0"><dict><key>Size</key><integer>1000000000</integer></dict></plist>'
+        exit 0
+      fi
+      """)
+      defer { restoreEnvironment("PATH", to: previousPath) }
+
+      let vmDir = try makeStandaloneVM(named: "asif", diskContents: "disk")
+      var vmConfig = try VMConfig(fromURL: vmDir.configURL)
+      vmConfig.diskFormat = .asif
+      try vmConfig.save(toURL: vmDir.configURL)
+
+      XCTAssertThrowsError(try vmDir.resizeDisk(2)) { error in
+        XCTAssertEqual("\(error)", "Failed to resize ASIF disk image: Resource temporarily unavailable\n")
+      }
+    }
+  }
+
   func testGetSurvivesUnavailableDiskCapacity() async throws {
     try await withTemporaryTartHome {
       let previousPath = try installUnavailableDiskutil()
@@ -188,6 +209,24 @@ final class CommandBehaviorTests: XCTestCase {
       try await Export.parse(["example.com/org/vm:latest"]).run()
 
       XCTAssertTrue(FileManager.default.fileExists(atPath: workingDirectory.appendingPathComponent("vm:latest.tvm").path))
+    }
+  }
+
+  func testClonePruneLimitFromEnvironment() throws {
+    let key = "TART_CLONE_PRUNE_LIMIT"
+    let previous = ProcessInfo.processInfo.environment[key]
+    defer { restoreEnvironment(key, to: previous) }
+
+    let args = ["source", "destination"]
+    unsetenv(key)
+    XCTAssertEqual(try Clone.parse(args).pruneLimitBytes(), 100 << 30)
+    setenv(key, "20", 1)
+    XCTAssertEqual(try Clone.parse(args).pruneLimitBytes(), 20 << 30)
+
+    for invalid in ["invalid", String(UInt.max)] {
+      setenv(key, invalid, 1)
+      XCTAssertThrowsError(try Clone.parse(args).pruneLimitBytes())
+      XCTAssertEqual(try Clone.parse(args + ["--prune-limit", "0"]).pruneLimitBytes(), 0)
     }
   }
 
@@ -409,6 +448,17 @@ final class CommandBehaviorTests: XCTestCase {
       let attachment = try XCTUnwrap(additionalDisk.configuration.attachment as? VZDiskImageStorageDeviceAttachment)
       XCTAssertEqual(attachment.cachingMode, .cached)
       XCTAssertEqual(attachment.synchronizationMode, .none)
+    }
+  }
+
+  func testAdditionalDiskWithoutPathIsRejected() throws {
+    for parseFrom in ["", ":", "ro", ":ro"] {
+      XCTAssertThrowsError(try AdditionalDisk(parseFrom: parseFrom), "--disk=\"\(parseFrom)\"") { error in
+        XCTAssertEqual(
+          (error as? ValidationError)?.message,
+          "--disk requires a path or URL, e.g. --disk=/path/to/disk.img"
+        )
+      }
     }
   }
 
