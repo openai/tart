@@ -1,69 +1,76 @@
+import CTartExecIO
 import Foundation
 
-// Avoid Tart's Darwin type shadowing the system module.
-private let closeExecDescriptor = close
+/// Blocking transfers run on private, cancellable native workers. Unlike
+/// DispatchIO, this never changes O_NONBLOCK on an inherited file description,
+/// even when unrelated exec processes share the same pipe or terminal.
+final class ExecChannel: @unchecked Sendable {
+  private struct Worker: @unchecked Sendable {
+    let pointer: OpaquePointer
+  }
 
-/// Own all of an exec session's descriptors together. dup() aliases share status
-/// flags: let every DispatchIO channel save nonblocking flags, then restore the
-/// original flags only after *all* channels relinquish their descriptors.
-final class ExecIO: @unchecked Sendable {
-  let channels: [DispatchIO]
+  private let queue = DispatchQueue(label: "org.cirruslabs.tart.exec.io")
+  private let lock = NSLock()
   private let closed = DispatchGroup()
+  private var worker: Worker?
 
-  init(fileDescriptors: [Int32]) throws {
-    var descriptors: [(fd: Int32, flags: Int32)] = []
-    do {
-      // Snapshot everything before changing any flags, including aliases such
-      // as an interactive terminal or stdout/stderr redirected with 2>&1.
-      // Validate every original first: dup could otherwise occupy a closed
-      // descriptor that a later iteration mistakes for an original.
-      let originals = try fileDescriptors.map { original in
-        let flags = fcntl(original, F_GETFL)
-        guard flags >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno)!) }
-        return (fd: original, flags: flags)
-      }
-      for original in originals {
-        let fd = fcntl(original.fd, F_DUPFD_CLOEXEC, 0)
-        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno)!) }
-        descriptors.append((fd, original.flags))
-      }
-      for descriptor in descriptors {
-        guard fcntl(descriptor.fd, F_SETFL, descriptor.flags | O_NONBLOCK) == 0 else {
-          throw POSIXError(POSIXErrorCode(rawValue: errno)!)
-        }
-      }
-    } catch {
-      for descriptor in descriptors {
-        _ = fcntl(descriptor.fd, F_SETFL, descriptor.flags)
-        _ = closeExecDescriptor(descriptor.fd)
-      }
-      throw error
+  init(fileDescriptor: Int32) throws {
+    var error: Int32 = 0
+    guard let pointer = tart_exec_io_create(fileDescriptor, &error) else {
+      throw POSIXError(POSIXErrorCode(rawValue: error) ?? .EIO)
     }
-
-    let ownedDescriptors = descriptors
-    let cleanup = DispatchGroup()
-    let queue = DispatchQueue(label: "org.cirruslabs.tart.exec.io-cleanup")
-    channels = ownedDescriptors.map { descriptor in
-      cleanup.enter()
-      return DispatchIO(type: .stream, fileDescriptor: descriptor.fd, queue: queue) { _ in
-        cleanup.leave()
-      }
-    }
-    let closed = self.closed
+    worker = Worker(pointer: pointer)
     closed.enter()
-    cleanup.notify(queue: queue) {
-      for descriptor in ownedDescriptors {
-        _ = fcntl(descriptor.fd, F_SETFL, descriptor.flags)
-        _ = closeExecDescriptor(descriptor.fd)
-      }
-      closed.leave()
-    }
   }
 
   deinit { cancel() }
 
+  private func submit(_ operation: @escaping @Sendable (Worker) -> Void) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    guard let worker else { return false }
+    queue.async { operation(worker) }
+    return true
+  }
+
+  func read(length: Int, queue callbackQueue: DispatchQueue, completion: @escaping @Sendable (Data, Int32) -> Void) {
+    if !submit({ worker in
+      var data = Data(count: length)
+      var transferred = 0
+      let error = data.withUnsafeMutableBytes {
+        tart_exec_io_read(worker.pointer, $0.baseAddress, $0.count, &transferred)
+      }
+      data.count = error == 0 ? transferred : 0
+      let result = data
+      callbackQueue.async { completion(result, error) }
+    }) {
+      callbackQueue.async { completion(Data(), ECANCELED) }
+    }
+  }
+
+  func write(_ data: Data, queue callbackQueue: DispatchQueue, completion: @escaping @Sendable (Int32) -> Void) {
+    if !submit({ worker in
+      let error = data.withUnsafeBytes {
+        tart_exec_io_write(worker.pointer, $0.baseAddress, $0.count)
+      }
+      callbackQueue.async { completion(error) }
+    }) {
+      callbackQueue.async { completion(ECANCELED) }
+    }
+  }
+
   func cancel() {
-    for channel in channels { channel.close(flags: .stop) }
+    lock.lock()
+    defer { lock.unlock() }
+    guard let worker else { return }
+    self.worker = nil
+    tart_exec_io_cancel(worker.pointer)
+    // Destruction runs after any accepted transfer returns.
+    let closed = self.closed
+    queue.async {
+      tart_exec_io_destroy(worker.pointer)
+      closed.leave()
+    }
   }
 
   func close() async {
@@ -71,5 +78,28 @@ final class ExecIO: @unchecked Sendable {
     await withCheckedContinuation { continuation in
       closed.notify(queue: .global()) { continuation.resume() }
     }
+  }
+}
+
+final class ExecIO: @unchecked Sendable {
+  let channels: [ExecChannel]
+
+  init(fileDescriptors: [Int32]) throws {
+    // Validate all originals before any duplicate can occupy a closed one.
+    for fd in fileDescriptors {
+      guard fcntl(fd, F_GETFL) >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+    }
+    channels = try fileDescriptors.map { try ExecChannel(fileDescriptor: $0) }
+  }
+
+  deinit { cancel() }
+
+  func cancel() {
+    for channel in channels { channel.cancel() }
+  }
+
+  func close() async {
+    cancel()
+    for channel in channels { await channel.close() }
   }
 }

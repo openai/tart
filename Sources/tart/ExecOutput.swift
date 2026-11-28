@@ -9,8 +9,8 @@ import Cirruslabs_TartGuestAgent_Apple_Swift
 final class ExecOutput: @unchecked Sendable {
   let eventLoop: EventLoop
   let completion: EventLoopPromise<Void>
-  private let stdout: DispatchIO
-  private let stderr: DispatchIO
+  private let stdout: ExecChannel
+  private let stderr: ExecChannel
   private let queue: DispatchQueue
   // Accessed only on eventLoop.
   private var channel: Channel?
@@ -20,7 +20,7 @@ final class ExecOutput: @unchecked Sendable {
   private var terminal: Result<Void, Error>?
   private var finished = false
 
-  init(eventLoop: EventLoop, stdout: DispatchIO, stderr: DispatchIO) {
+  init(eventLoop: EventLoop, stdout: ExecChannel, stderr: ExecChannel) {
     queue = DispatchQueue(label: "org.cirruslabs.tart.exec.output")
     self.eventLoop = eventLoop
     self.stdout = stdout
@@ -67,7 +67,7 @@ final class ExecOutput: @unchecked Sendable {
     guard !finished && !writing else { return }
     while !responses.isEmpty {
       let response = responses.removeFirst()
-      let io: DispatchIO
+      let io: ExecChannel
       let data: Data
       switch response.type {
       case .standardOutput(let chunk):
@@ -83,16 +83,13 @@ final class ExecOutput: @unchecked Sendable {
         continue
       }
       writing = true
-      let bytes = data.withUnsafeBytes { DispatchData(bytes: $0) }
-      io.write(offset: 0, data: bytes, queue: queue) { done, _, error in
-        if done || error != 0 {
-          self.eventLoop.execute {
-            self.writing = false
-            if error != 0 {
-              self.finish(.failure(POSIXError(POSIXErrorCode(rawValue: error)!)))
-            } else {
-              self.drain()
-            }
+      io.write(data, queue: queue) { error in
+        self.eventLoop.execute {
+          self.writing = false
+          if error != 0 {
+            self.finish(.failure(POSIXError(POSIXErrorCode(rawValue: error) ?? .EIO)))
+          } else {
+            self.drain()
           }
         }
       }
@@ -111,8 +108,8 @@ final class ExecOutput: @unchecked Sendable {
     finished = true
     responses.removeAll()
     channel = nil
-    stdout.close(flags: .stop)
-    stderr.close(flags: .stop)
+    stdout.cancel()
+    stderr.cancel()
     completion.completeWith(result)
   }
 }

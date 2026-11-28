@@ -32,10 +32,10 @@ final class ExecIOTests: XCTestCase {
     let flags = execTestFileStatus(fd)
     let io = try ExecIO(fileDescriptors: [fd, fd])
     try await write(Data([1]), to: io.channels[0])
-    // One channel relinquishing its descriptor must not make its alias block.
-    io.channels[0].close(flags: .stop)
+    // Closing one channel must leave the caller and its other alias untouched.
+    io.channels[0].cancel()
     try await write(Data([2]), to: io.channels[1])
-    XCTAssertNotEqual(fcntl(fd, F_GETFL) & O_NONBLOCK, 0)
+    XCTAssertEqual(execTestFileStatus(fd), flags)
     await io.close()
     XCTAssertEqual(execTestFileStatus(fd), flags)
     XCTAssertEqual(try pipe.fileHandleForReading.read(upToCount: 2), Data([1, 2]))
@@ -62,13 +62,72 @@ final class ExecIOTests: XCTestCase {
     XCTAssertEqual(try master.read(upToCount: 1), Data([8]))
   }
 
-  private func write(_ data: Data, to channel: DispatchIO) async throws {
+  func testOverlappingOwnersKeepInheritedFlagsAndRemainUsable() async throws {
+    for reversed in [false, true] {
+      let pipe = Pipe()
+      let fd = pipe.fileHandleForWriting.fileDescriptor
+      let flags = execTestFileStatus(fd)
+      let first = try ExecIO(fileDescriptors: [fd])
+      let second = try ExecIO(fileDescriptors: [fd])
+      XCTAssertEqual(execTestFileStatus(fd), flags)
+      try await write(Data([1]), to: first.channels[0])
+      try await write(Data([2]), to: second.channels[0])
+      XCTAssertEqual(execTestFileStatus(fd), flags)
+      let (closing, remaining) = reversed ? (second, first) : (first, second)
+      await closing.close()
+      XCTAssertEqual(execTestFileStatus(fd), flags)
+      try await write(Data([3]), to: remaining.channels[0])
+      await remaining.close()
+      XCTAssertEqual(execTestFileStatus(fd), flags)
+      XCTAssertEqual(try pipe.fileHandleForReading.read(upToCount: 3), Data([1, 2, 3]))
+    }
+  }
+
+  func testAlreadyNonblockingInputAndCancellationPreserveFlags() async throws {
+    let pipe = Pipe()
+    let fd = pipe.fileHandleForReading.fileDescriptor
+    let original = fcntl(fd, F_GETFL)
+    XCTAssertEqual(fcntl(fd, F_SETFL, original | O_NONBLOCK), 0)
+    defer { _ = fcntl(fd, F_SETFL, original) }
+    let flags = execTestFileStatus(fd)
+    let io = try ExecIO(fileDescriptors: [fd])
+    let input = ExecInput(io: io.channels[0])
+    let read = Task { try await input.next() }
+    try pipe.fileHandleForWriting.write(contentsOf: Data([17]))
+    let data = try await read.value
+    XCTAssertEqual(data, Data([17]))
+    let idle = Task { try await input.next() }
+    idle.cancel()
+    do { _ = try await idle.value; XCTFail("Expected cancellation") }
+    catch { XCTAssertTrue(error is CancellationError) }
+    await io.close()
+    XCTAssertEqual(execTestFileStatus(fd), flags)
+  }
+
+  func testClosedOutputPeerReturnsBrokenPipe() async throws {
+    // Tests invoke ExecIO directly, without Root's exec signal setup.
+    let previous = signal(SIGPIPE, SIG_IGN)
+    defer { signal(SIGPIPE, previous) }
+    let pipe = Pipe()
+    try pipe.fileHandleForReading.close()
+    let fd = pipe.fileHandleForWriting.fileDescriptor
+    let flags = execTestFileStatus(fd)
+    let io = try ExecIO(fileDescriptors: [fd])
+    do {
+      try await write(Data([1]), to: io.channels[0])
+      XCTFail("Expected broken pipe")
+    } catch let error as POSIXError {
+      XCTAssertEqual(error.code, .EPIPE)
+    }
+    await io.close()
+    XCTAssertEqual(execTestFileStatus(fd), flags)
+  }
+
+  private func write(_ data: Data, to channel: ExecChannel) async throws {
     try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-      channel.write(offset: 0, data: data.withUnsafeBytes { DispatchData(bytes: $0) }, queue: .global()) { done, _, error in
-        if done {
-          if error == 0 { continuation.resume() }
-          else { continuation.resume(throwing: POSIXError(POSIXErrorCode(rawValue: error)!)) }
-        }
+      channel.write(data, queue: .global()) { error in
+        if error == 0 { continuation.resume() }
+        else { continuation.resume(throwing: POSIXError(POSIXErrorCode(rawValue: error)!)) }
       }
     }
   }

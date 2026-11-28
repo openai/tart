@@ -76,13 +76,16 @@ struct Root: AsyncParsableCommand {
       // Every other command is asynchronous and doesn't touch the main thread, so
       // drive it from a detached task and let the Dispatch main queue keep the
       // process alive until the command exits.
-      // Exec temporarily changes inherited open-file status flags. Let SIGTERM
-      // cancel it so its terminal and descriptor cleanup runs before termination.
+      // Cancel Exec on SIGTERM so pending I/O and terminal cleanup finish
+      // before normal signal termination.
       // Other commands keep their existing SIGTERM behavior.
       let terminationRequested = ManagedAtomic(false)
       let sigtermSrc = command is Exec ? DispatchSource.makeSignalSource(signal: SIGTERM) : nil
       if sigtermSrc != nil {
         signal(SIGTERM, SIG_IGN)
+        // Darwin may deliver SIGPIPE process-wide. Report EPIPE from the
+        // worker instead, without changing the inherited file description.
+        signal(SIGPIPE, SIG_IGN)
       }
       let task = Task.detached {
         await runInBackground(command, terminationRequested: terminationRequested)

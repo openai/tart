@@ -1,96 +1,61 @@
 import Foundation
 
-/// A demand-driven stdin reader. DispatchIO keeps blocking file I/O off Swift's
-/// cooperative executor and can cancel an idle pipe/terminal read. A read operation
-/// may deliver partial chunks (important for terminals), but reads at most 64 KiB.
+/// A demand-driven stdin reader. Each native read is bounded and can return
+/// partial input immediately, without changing the caller's descriptor flags.
 final class ExecInput: @unchecked Sendable {
   static let chunkSize = 64 * 1024
 
   private let queue = DispatchQueue(label: "org.cirruslabs.tart.exec.stdin")
-  private let io: DispatchIO
+  private let io: ExecChannel
   private let owner: ExecIO?
   // Accessed only on queue.
-  private var chunks: [Data] = []
   private var reading = false
   private var ended = false
-  private var failure: Error?
-  private var waiter: CheckedContinuation<Data?, Error>?
 
   convenience init(fileDescriptor: Int32) throws {
     let owner = try ExecIO(fileDescriptors: [fileDescriptor])
     self.init(io: owner.channels[0], owner: owner)
   }
 
-  init(io: DispatchIO, owner: ExecIO? = nil) {
+  init(io: ExecChannel, owner: ExecIO? = nil) {
     self.io = io
     self.owner = owner
-    io.setLimit(lowWater: 1)
-    io.setLimit(highWater: Self.chunkSize)
   }
 
-  deinit {
-    io.close(flags: .stop)
-  }
+  deinit { cancel() }
 
   func next() async throws -> Data? {
     try await withTaskCancellationHandler {
-      try await withCheckedThrowingContinuation { continuation in
+      try Task.checkCancellation()
+      let data: Data? = try await withCheckedThrowingContinuation { continuation in
         queue.async {
-          precondition(self.waiter == nil)
-          self.waiter = continuation
-          self.deliver()
-          self.readIfNeeded()
+          precondition(!self.reading)
+          if self.ended {
+            continuation.resume(returning: nil)
+            return
+          }
+          self.reading = true
+          self.io.read(length: Self.chunkSize, queue: self.queue) { data, error in
+            self.reading = false
+            if error == ECANCELED {
+              continuation.resume(throwing: CancellationError())
+            } else if error != 0 {
+              continuation.resume(throwing: POSIXError(POSIXErrorCode(rawValue: error) ?? .EIO))
+            } else {
+              self.ended = data.isEmpty
+              continuation.resume(returning: self.ended ? nil : data)
+            }
+          }
         }
       }
+      try Task.checkCancellation()
+      return data
     } onCancel: {
       self.cancel()
     }
   }
 
-  func cancel() {
-    queue.async {
-      self.failure = CancellationError()
-      self.chunks.removeAll()
-      self.io.close(flags: .stop)
-      self.deliver()
-    }
-  }
-
-  private func readIfNeeded() {
-    guard waiter != nil && !reading && !ended && failure == nil else { return }
-    reading = true
-    var bytesRead = 0
-    io.read(offset: 0, length: Self.chunkSize, queue: queue) { done, data, error in
-      if self.failure != nil { return }
-      if let data, !data.isEmpty {
-        bytesRead += data.count
-        self.chunks.append(Data(data))
-      }
-      if error != 0 {
-        self.failure = POSIXError(POSIXErrorCode(rawValue: error)!)
-      }
-      if done {
-        self.reading = false
-        self.ended = bytesRead < Self.chunkSize
-      }
-      self.deliver()
-      self.readIfNeeded()
-    }
-  }
-
-  private func deliver() {
-    guard let waiter else { return }
-    if let failure {
-      self.waiter = nil
-      waiter.resume(throwing: failure)
-    } else if !chunks.isEmpty {
-      self.waiter = nil
-      waiter.resume(returning: chunks.removeFirst())
-    } else if ended {
-      self.waiter = nil
-      waiter.resume(returning: nil)
-    }
-  }
+  func cancel() { io.cancel() }
 }
 
 /// Do not pull the next chunk until the preceding transport write has completed.
