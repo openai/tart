@@ -30,7 +30,9 @@ let package = Package(
 
   ],
   targets: [
+    .target(name: "CTartExecIO"),
     .executableTarget(name: "tart", dependencies: [
+      "CTartExecIO",
       .product(name: "Algorithms", package: "swift-algorithms"),
       .product(name: "ArgumentParser", package: "swift-argument-parser"),
       .product(name: "Dynamic", package: "Dynamic"),
